@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="我的规划">
+<title>我的规划</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f0f13; font-family: 'DM Sans','PingFang SC',sans-serif; }
+::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+input,textarea,button,select { font-family: inherit; }
+input[type=range] { accent-color: #7c6af7; }
+@keyframes popIn { from{opacity:0;transform:scale(0.92) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
+@keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+@keyframes ringFlash { 0%,100%{background:rgba(180,30,30,0.95)} 50%{background:rgba(220,60,60,1)} }
+.card { animation: slideUp 0.28s ease both; transition: box-shadow 0.2s; }
+.card:hover { box-shadow: 0 4px 24px rgba(124,106,247,0.1); }
+.ifld { background:#1e1e2a; border:1.5px solid #2e2e3e; color:#ddd8f0; border-radius:10px; padding:10px 14px; width:100%; font-size:14px; transition:border-color 0.2s; }
+.ifld:focus { outline:none; border-color:#7c6af7; }
+.ifld::placeholder { color:#45435a; }
+.isel { background:#1e1e2a; border:1.5px solid #2e2e3e; color:#ddd8f0; border-radius:10px; padding:10px 14px; width:100%; font-size:14px; }
+.isel:focus { outline:none; border-color:#7c6af7; }
+.tab { transition:all 0.2s; cursor:pointer; }
+.del { opacity:0; transition:opacity 0.15s; }
+.card:hover .del { opacity:1; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+function uid() { return Math.random().toString(36).slice(2,10); }
+function today() { return new Date().toISOString().slice(0,10); }
+function fmt(dt) {
+  if(!dt) return "";
+  const d=new Date(dt);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+function fmtDL(dt) {
+  if(!dt) return "";
+  const diff=new Date(dt)-new Date();
+  if(diff<0) return "已逾期";
+  if(diff<3600000) return `${Math.ceil(diff/60000)}分钟后`;
+  if(diff<86400000) return `${Math.ceil(diff/3600000)}小时后`;
+  return `${Math.ceil(diff/86400000)}天后`;
+}
+function monthKey() { return new Date().toISOString().slice(0,7); }
+
+function playAlarm(ctx) {
+  [880,660,880,660,880,880].forEach((f,i)=>{
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value=f; o.type="square";
+    g.gain.setValueAtTime(0.4,ctx.currentTime+i*0.2);
+    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+i*0.2+0.18);
+    o.start(ctx.currentTime+i*0.2); o.stop(ctx.currentTime+i*0.2+0.19);
+  });
+}
+
+const TASK_LABELS = [
+  {id:"work",  label:"工作",    color:"#7c6af7"},
+  {id:"self",  label:"自我提升", color:"#f5a623"},
+  {id:"life",  label:"生活",    color:"#4caf87"},
+  {id:"learn", label:"学习",    color:"#e05c5c"},
+];
+const QUADRANTS = [
+  {id:"q1",label:"重要且紧急",  sub:"立刻做",  color:"#e05c5c",bg:"#1a0f0f"},
+  {id:"q2",label:"重要不紧急",  sub:"计划做",  color:"#7c6af7",bg:"#0f0f1a"},
+  {id:"q3",label:"紧急不重要",  sub:"委托他人", color:"#f5a623",bg:"#1a1500"},
+  {id:"q4",label:"不重要不紧急",sub:"减少删除", color:"#4caf87",bg:"#0f1a0f"},
+];
+
+const SAVE_KEY="planner_v2";
+function load(){try{return JSON.parse(localStorage.getItem(SAVE_KEY))||{};}catch(e){return{};}}
+
+function App() {
+  const s=load();
+  const [tab,setTab]=useState("tasks");
+  const [tasks,setTasks]=useState(s.tasks||[]);
+  const [matrix,setMatrix]=useState(s.matrix||[]);
+  const [habits,setHabits]=useState(s.habits||[]);
+  const [logs,setLogs]=useState(s.logs||{});
+  const [alarm,setAlarm]=useState(null);
+  const [flash,setFlash]=useState(false);
+  const [audioUnlocked,setAudioUnlocked]=useState(false);
+  const audioCtxRef=useRef(null);
+  const alarmRef=useRef(null);
+
+  useEffect(()=>{localStorage.setItem(SAVE_KEY,JSON.stringify({tasks,matrix,habits,logs}));},[tasks,matrix,habits,logs]);
+
+  const unlockAudio=()=>{
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      const b=ctx.createBuffer(1,1,22050),s2=ctx.createBufferSource();
+      s2.buffer=b;s2.connect(ctx.destination);s2.start(0);
+      audioCtxRef.current=ctx;setAudioUnlocked(true);
+      setTimeout(()=>playAlarm(ctx),100);
+    }catch(e){}
+  };
+
+  const triggerAlarm=useCallback((item)=>{
+    setAlarm(item);setFlash(true);let c=0;
+    if(alarmRef.current)clearInterval(alarmRef.current);
+    alarmRef.current=setInterval(()=>{setFlash(f=>!f);if(++c>20){clearInterval(alarmRef.current);setFlash(false);}},350);
+    if(audioCtxRef.current){
+      const ctx=audioCtxRef.current,p=()=>playAlarm(ctx);
+      [0,1200,2400].forEach(d=>setTimeout(()=>ctx.state==="suspended"?ctx.resume().then(p):p(),d));
+    }
+    if("Notification"in window&&Notification.permission==="granted")new Notification("⏰ 提醒！",{body:item.title});
+    if(navigator.vibrate)navigator.vibrate([300,100,300,100,300]);
+  },[]);
+
+  useEffect(()=>{
+    if("Notification"in window&&Notification.permission==="default")Notification.requestPermission();
+    const tick=setInterval(()=>{
+      const now=Date.now();
+      setMatrix(prev=>{
+        let changed=false;
+        const next=prev.map(item=>{
+          if(!item.fired&&!item.done&&item.time&&new Date(item.time).getTime()<=now){changed=true;triggerAlarm(item);return{...item,fired:true};}
+          return item;
+        });
+        return changed?next:prev;
+      });
+    },10000);
+    return()=>clearInterval(tick);
+  },[triggerAlarm]);
+
+  const dismissAlarm=()=>{clearInterval(alarmRef.current);setFlash(false);setAlarm(null);};
+
+  // task form
+  const [tForm,setTForm]=useState({title:"",label:"work",estimatedHours:"",deadline:"",inWeekPlan:true});
+  const [showTF,setShowTF]=useState(false);
+  const [editTId,setEditTId]=useState(null);
+  const saveTask=()=>{
+    if(!tForm.title.trim())return;
+    if(editTId){setTasks(p=>p.map(t=>t.id===editTId?{...t,...tForm,estimatedHours:parseFloat(tForm.estimatedHours)||0}:t));setEditTId(null);}
+    else setTasks(p=>[{id:uid(),...tForm,estimatedHours:parseFloat(tForm.estimatedHours)||0,progress:0,done:false},...p]);
+    setTForm({title:"",label:"work",estimatedHours:"",deadline:"",inWeekPlan:true});setShowTF(false);
+  };
+
+  // matrix form
+  const [mForm,setMForm]=useState({title:"",quadrant:"q1",time:""});
+  const [showMF,setShowMF]=useState(false);
+  const saveMatrix=()=>{
+    if(!mForm.title.trim())return;
+    setMatrix(p=>[{id:uid(),...mForm,done:false,fired:false},...p]);
+    setMForm({title:"",quadrant:"q1",time:""});setShowMF(false);
+  };
+
+  // habit form
+  const [hForm,setHForm]=useState({title:"",emoji:"✅",type:"good",unit:"次"});
+  const [showHF,setShowHF]=useState(false);
+  const [statsView,setStatsView]=useState("week");
+  const saveHabit=()=>{
+    if(!hForm.title.trim())return;
+    setHabits(p=>[{id:uid(),...hForm},...p]);
+    setHForm({title:"",emoji:"✅",type:"good",unit:"次"});setShowHF(false);
+  };
+  const logHabit=(hid,delta)=>{
+    const d=today();
+    setLogs(prev=>{const hl={...(prev[hid]||{})};hl[d]=Math.max(0,(hl[d]||0)+delta);return{...prev,[hid]:hl};});
+  };
+  const getCount=(hid,d)=>(logs[hid]||{})[d]||0;
+  const getPeriodCount=(hid,period)=>{
+    const hl=logs[hid]||{},now=new Date();
+    return Object.entries(hl).reduce((sum,[d,c])=>{
+      const dd=new Date(d);
+      if(period==="week"){const diff=(now-dd)/86400000;return diff>=0&&diff<7?sum+c:sum;}
+      return d.slice(0,7)===monthKey()?sum+c:sum;
+    },0);
+  };
+
+  const C={bg:"#0f0f13",surface:"#16161d",border:"#22222e",accent:"#7c6af7",accentSoft:"#7c6af722",warn:"#f5a623",ok:"#4caf87",danger:"#e05c5c",text:"#ddd8f0",sub:"#7a7590",muted:"#35334a"};
+  const [taskFilter,setTaskFilter]=useState("all");
+  const filteredTasks=taskFilter==="all"?tasks:tasks.filter(t=>t.label===taskFilter);
+  const weekTasks=tasks.filter(t=>t.inWeekPlan&&!t.done);
+
+  return(
+    <div style={{minHeight:"100vh",background:flash?"#2a0505":C.bg,color:C.text,transition:"background 0.2s"}}>
+
+      {alarm&&(
+        <div onClick={dismissAlarm} style={{position:"fixed",inset:0,zIndex:9999,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20,cursor:"pointer",animation:"ringFlash 0.7s ease infinite"}}>
+          <div style={{fontSize:80}}>⏰</div>
+          <div style={{fontSize:24,fontWeight:700,textAlign:"center",padding:"0 40px",lineHeight:1.4}}>{alarm.title}</div>
+          <div style={{fontSize:13,color:"#ffbbbb"}}>点击任意位置关闭</div>
+          <div style={{marginTop:8,padding:"12px 40px",background:"rgba(255,255,255,0.15)",borderRadius:50,fontSize:15,fontWeight:700,border:"2px solid rgba(255,255,255,0.3)"}}>✓ 我知道了</div>
+        </div>
+      )}
+
+      <div style={{maxWidth:580,margin:"0 auto",padding:"28px 16px 0"}}>
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:11,letterSpacing:"0.16em",color:C.sub,textTransform:"uppercase",marginBottom:3}}>个人规划</div>
+          <h1 style={{fontSize:24,fontWeight:700,letterSpacing:"-0.5px"}}>
+            {tab==="tasks"?"📋 任务":tab==="matrix"?"🎯 四象限":"🌱 习惯打卡"}
+          </h1>
+        </div>
+        <div style={{display:"flex",gap:5,background:C.surface,borderRadius:14,padding:5,border:`1px solid ${C.border}`,marginBottom:20}}>
+          {[["tasks","任务"],["matrix","四象限"],["habits","习惯"]].map(([k,l])=>(
+            <button key={k} className="tab" onClick={()=>setTab(k)} style={{flex:1,padding:"9px 6px",borderRadius:10,border:"none",background:tab===k?C.accent:"transparent",color:tab===k?"#fff":C.sub,fontWeight:tab===k?600:400,fontSize:13}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{maxWidth:580,margin:"0 auto",padding:"0 16px 80px"}}>
+
+        {/* ─── TASKS ─── */}
+        {tab==="tasks"&&(<>
+          {weekTasks.length>0&&(
+            <div style={{background:"linear-gradient(135deg,#1e1a3a,#1a1e30)",border:`1px solid ${C.accent}44`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+              <div style={{fontSize:10,letterSpacing:"0.15em",color:C.accent,textTransform:"uppercase",marginBottom:8}}>本周计划</div>
+              {weekTasks.map(t=>{
+                const lb=TASK_LABELS.find(l=>l.id===t.label)||TASK_LABELS[0];
+                return(
+                  <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:lb.color,flexShrink:0}}/>
+                    <div style={{flex:1,fontSize:13,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</div>
+                    <div style={{width:56,height:4,background:C.muted,borderRadius:3,overflow:"hidden",flexShrink:0}}>
+                      <div style={{width:`${t.progress}%`,height:"100%",background:lb.color,borderRadius:3,transition:"width 0.3s"}}/>
+                    </div>
+                    <div style={{fontSize:11,color:C.sub,minWidth:28,textAlign:"right"}}>{t.progress}%</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto",paddingBottom:2}}>
+            <button onClick={()=>setTaskFilter("all")} style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${taskFilter==="all"?"#fff":"#2e2e3e"}`,background:taskFilter==="all"?"#fff":"transparent",color:taskFilter==="all"?"#0f0f13":C.sub,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>全部</button>
+            {TASK_LABELS.map(lb=>(
+              <button key={lb.id} onClick={()=>setTaskFilter(lb.id)} style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${taskFilter===lb.id?lb.color:"#2e2e3e"}`,background:taskFilter===lb.id?lb.color+"22":"transparent",color:taskFilter===lb.id?lb.color:C.sub,fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                {lb.label}
+              </button>
+            ))}
+          </div>
+
+          {!showTF&&(
+            <button onClick={()=>{setShowTF(true);setEditTId(null);setTForm({title:"",label:"work",estimatedHours:"",deadline:"",inWeekPlan:true});}} style={{width:"100%",padding:"12px",background:C.accentSoft,border:`1.5px dashed ${C.accent}88`,borderRadius:12,color:C.accent,fontSize:14,fontWeight:500,cursor:"pointer",marginBottom:12}}>
+              ＋ 新建任务
+            </button>
+          )}
+
+          {showTF&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:14,animation:"popIn 0.25s ease"}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.accent,marginBottom:12}}>{editTId?"编辑任务":"新建任务"}</div>
+              <input className="ifld" placeholder="任务名称" value={tForm.title} onChange={e=>setTForm(f=>({...f,title:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&saveTask()} style={{marginBottom:8}}/>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <select className="isel" value={tForm.label} onChange={e=>setTForm(f=>({...f,label:e.target.value}))} style={{flex:1}}>
+                  {TASK_LABELS.map(lb=><option key={lb.id} value={lb.id}>{lb.label}</option>)}
+                </select>
+                <input className="ifld" placeholder="时长(h)" type="number" min="0" step="0.5" value={tForm.estimatedHours} onChange={e=>setTForm(f=>({...f,estimatedHours:e.target.value}))} style={{flex:"0 0 90px"}}/>
+              </div>
+              <input className="ifld" type="datetime-local" value={tForm.deadline} onChange={e=>setTForm(f=>({...f,deadline:e.target.value}))} style={{marginBottom:10}}/>
+              <label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:C.sub,marginBottom:14,cursor:"pointer"}}>
+                <input type="checkbox" checked={tForm.inWeekPlan} onChange={e=>setTForm(f=>({...f,inWeekPlan:e.target.checked}))} style={{accentColor:C.accent,width:15,height:15}}/>
+                加入本周计划
+              </label>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveTask} style={{flex:1,padding:"10px",background:C.accent,border:"none",borderRadius:10,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>{editTId?"保存修改":"添加"}</button>
+                <button onClick={()=>{setShowTF(false);setEditTId(null);}} style={{padding:"10px 16px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.sub,cursor:"pointer",fontSize:14}}>取消</button>
+              </div>
+            </div>
+          )}
+
+          {filteredTasks.filter(t=>!t.done).map((t,i)=>(
+            <TaskCard key={t.id} t={t} i={i} C={C}
+              setProgress={(id,v)=>setTasks(p=>p.map(x=>x.id===id?{...x,progress:v}:x))}
+              toggleDone={(id)=>setTasks(p=>p.map(x=>x.id===id?{...x,done:!x.done,progress:!x.done?100:x.progress}:x))}
+              onDelete={(id)=>setTasks(p=>p.filter(x=>x.id!==id))}
+              onEdit={(t)=>{setTForm({title:t.title,label:t.label||"work",estimatedHours:t.estimatedHours,deadline:t.deadline||"",inWeekPlan:t.inWeekPlan});setEditTId(t.id);setShowTF(true);}}
+            />
+          ))}
+
+          {filteredTasks.filter(t=>t.done).length>0&&(<>
+            <div style={{fontSize:10,color:C.muted,letterSpacing:"0.12em",textTransform:"uppercase",margin:"18px 0 8px"}}>已完成</div>
+            {filteredTasks.filter(t=>t.done).map((t,i)=>(
+              <TaskCard key={t.id} t={t} i={i} C={C} done
+                setProgress={(id,v)=>setTasks(p=>p.map(x=>x.id===id?{...x,progress:v}:x))}
+                toggleDone={(id)=>setTasks(p=>p.map(x=>x.id===id?{...x,done:!x.done}:x))}
+                onDelete={(id)=>setTasks(p=>p.filter(x=>x.id!==id))}
+                onEdit={()=>{}}
+              />
+            ))}
+            <button onClick={()=>setTasks(p=>p.filter(t=>!t.done))} style={{width:"100%",marginTop:6,padding:"9px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.sub,fontSize:12,cursor:"pointer"}}>清除已完成</button>
+          </>)}
+        </>)}
+
+        {/* ─── MATRIX ─── */}
+        {tab==="matrix"&&(<>
+          {!audioUnlocked?(
+            <div style={{background:"#1a1500",border:"1.5px solid #f5a623",borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:20}}>🔇</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600,color:"#f5a623"}}>声音未激活</div>
+                <div style={{fontSize:11,color:"#7a7590"}}>有提醒时间的事项，到时间会触发闹钟</div>
+              </div>
+              <button onClick={unlockAudio} style={{padding:"7px 14px",background:"#f5a623",border:"none",borderRadius:8,color:"#1a1000",fontWeight:700,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>🔔 激活</button>
+            </div>
+          ):(
+            <div style={{background:"#0f1a0f",border:"1px solid #4caf8744",borderRadius:12,padding:"9px 14px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+              <span>🔊</span><span style={{fontSize:12,color:"#4caf87"}}>声音已激活 ✓</span>
+            </div>
+          )}
+
+          {!showMF&&(
+            <button onClick={()=>setShowMF(true)} style={{width:"100%",padding:"12px",background:"#1a0f0f",border:"1.5px dashed #e05c5c88",borderRadius:12,color:"#e05c5c",fontSize:14,fontWeight:500,cursor:"pointer",marginBottom:12}}>
+              ＋ 添加事项
+            </button>
+          )}
+          {showMF&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:14,animation:"popIn 0.25s ease"}}>
+              <div style={{fontSize:13,fontWeight:600,color:"#e05c5c",marginBottom:12}}>新增事项</div>
+              <input className="ifld" placeholder="事项内容" value={mForm.title} onChange={e=>setMForm(f=>({...f,title:e.target.value}))} style={{marginBottom:8}}/>
+              <select className="isel" value={mForm.quadrant} onChange={e=>setMForm(f=>({...f,quadrant:e.target.value}))} style={{marginBottom:8}}>
+                {QUADRANTS.map(q=><option key={q.id} value={q.id}>{q.label} — {q.sub}</option>)}
+              </select>
+              <input className="ifld" type="datetime-local" placeholder="提醒时间（可选）" value={mForm.time} onChange={e=>setMForm(f=>({...f,time:e.target.value}))} style={{marginBottom:14}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveMatrix} style={{flex:1,padding:"10px",background:"#e05c5c",border:"none",borderRadius:10,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>添加</button>
+                <button onClick={()=>setShowMF(false)} style={{padding:"10px 16px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.sub,cursor:"pointer",fontSize:14}}>取消</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            {QUADRANTS.map(q=>{
+              const items=matrix.filter(m=>m.quadrant===q.id&&!m.done);
+              const doneCount=matrix.filter(m=>m.quadrant===q.id&&m.done).length;
+              return(
+                <div key={q.id} style={{background:q.bg,border:`1.5px solid ${q.color}44`,borderRadius:14,padding:12,minHeight:150}}>
+                  <div style={{fontSize:11,fontWeight:700,color:q.color,marginBottom:1}}>{q.label}</div>
+                  <div style={{fontSize:10,color:q.color+"88",marginBottom:10,paddingBottom:8,borderBottom:`1px solid ${q.color}22`}}>{q.sub}</div>
+                  {items.map(item=>(
+                    <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:6,marginBottom:8}}>
+                      <div onClick={()=>setMatrix(p=>p.map(x=>x.id===item.id?{...x,done:true}:x))}
+                        style={{width:15,height:15,borderRadius:4,border:`1.5px solid ${q.color}`,flexShrink:0,marginTop:2,cursor:"pointer",transition:"all 0.2s"}}/>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,color:"#ddd8f0",lineHeight:1.4}}>{item.title}</div>
+                        {item.time&&<div style={{fontSize:10,color:item.fired?q.color:"#7a7590",marginTop:2}}>{item.fired?"⚠ 已触发":fmtDL(item.time)}</div>}
+                      </div>
+                      <button onClick={()=>setMatrix(p=>p.filter(x=>x.id!==item.id))} style={{background:"transparent",border:"none",color:"#35334a",fontSize:12,cursor:"pointer",padding:"1px 3px",lineHeight:1,flexShrink:0}}>✕</button>
+                    </div>
+                  ))}
+                  {items.length===0&&doneCount===0&&<div style={{fontSize:11,color:"#35334a",textAlign:"center",marginTop:20}}>空</div>}
+                  {doneCount>0&&<div style={{fontSize:10,color:"#35334a",marginTop:6}}>{doneCount} 项已完成</div>}
+                </div>
+              );
+            })}
+          </div>
+          {matrix.filter(m=>m.done).length>0&&(
+            <button onClick={()=>setMatrix(p=>p.filter(m=>!m.done))} style={{width:"100%",marginTop:10,padding:"9px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.sub,fontSize:12,cursor:"pointer"}}>清除已完成事项</button>
+          )}
+        </>)}
+
+        {/* ─── HABITS ─── */}
+        {tab==="habits"&&(<>
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            {[["week","本周"],["month","本月"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setStatsView(k)} style={{padding:"6px 16px",borderRadius:20,border:`1.5px solid ${statsView===k?C.ok:C.border}`,background:statsView===k?C.ok+"22":"transparent",color:statsView===k?C.ok:C.sub,fontSize:12,fontWeight:600,cursor:"pointer"}}>
+                {l}统计
+              </button>
+            ))}
+          </div>
+
+          {!showHF&&(
+            <button onClick={()=>setShowHF(true)} style={{width:"100%",padding:"12px",background:"#0f1a0f",border:`1.5px dashed ${C.ok}88`,borderRadius:12,color:C.ok,fontSize:14,fontWeight:500,cursor:"pointer",marginBottom:12}}>
+              ＋ 添加打卡习惯
+            </button>
+          )}
+          {showHF&&(
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,marginBottom:14,animation:"popIn 0.25s ease"}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.ok,marginBottom:12}}>新建习惯</div>
+              <input className="ifld" placeholder="习惯名称，如：吃维生素、熬夜" value={hForm.title} onChange={e=>setHForm(f=>({...f,title:e.target.value}))} style={{marginBottom:8}}/>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input className="ifld" placeholder="图标" value={hForm.emoji} onChange={e=>setHForm(f=>({...f,emoji:e.target.value}))} style={{flex:"0 0 70px",textAlign:"center",fontSize:20}}/>
+                <select className="isel" value={hForm.type} onChange={e=>setHForm(f=>({...f,type:e.target.value}))} style={{flex:1}}>
+                  <option value="good">✅ 正向（越多越好）</option>
+                  <option value="bad">⚠️ 反向（越少越好）</option>
+                </select>
+              </div>
+              <input className="ifld" placeholder="计量单位，如：次、杯、小时" value={hForm.unit} onChange={e=>setHForm(f=>({...f,unit:e.target.value}))} style={{marginBottom:14}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveHabit} style={{flex:1,padding:"10px",background:C.ok,border:"none",borderRadius:10,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>添加</button>
+                <button onClick={()=>setShowHF(false)} style={{padding:"10px 16px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,color:C.sub,cursor:"pointer",fontSize:14}}>取消</button>
+              </div>
+            </div>
+          )}
+
+          {habits.length===0&&(
+            <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:14}}>
+              <div style={{fontSize:40,marginBottom:12}}>🌱</div>
+              还没有打卡习惯，添加一个吧
+            </div>
+          )}
+
+          {habits.map((h,i)=>{
+            const todayCount=getCount(h.id,today());
+            const periodCount=getPeriodCount(h.id,statsView);
+            const isBad=h.type==="bad";
+            const ac=isBad?"#f5a623":C.ok;
+            return(
+              <div key={h.id} className="card" style={{animationDelay:`${i*0.05}s`,background:C.surface,border:`1px solid ${isBad?"#f5a62333":C.ok+"33"}`,borderRadius:14,padding:16,marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+                  <div style={{width:44,height:44,borderRadius:12,background:ac+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{h.emoji}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:14,fontWeight:600,color:C.text}}>{h.title}</div>
+                    <div style={{fontSize:11,color:isBad?"#f5a623":C.ok,marginTop:2}}>{isBad?"⚠ 反向记录 · 越少越好":"✅ 正向记录 · 越多越好"}</div>
+                  </div>
+                  <button className="del" onClick={()=>{setHabits(p=>p.filter(x=>x.id!==h.id));setLogs(p=>{const n={...p};delete n[h.id];return n;});}} style={{background:"transparent",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"4px 6px"}}>✕</button>
+                </div>
+
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,background:ac+"11",borderRadius:10,padding:"10px 14px"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:11,color:C.sub,marginBottom:2}}>今天</div>
+                    <div style={{fontSize:22,fontWeight:700,color:ac}}>{todayCount} <span style={{fontSize:13,fontWeight:400,color:C.sub}}>{h.unit}</span></div>
+                  </div>
+                  <button onClick={()=>logHabit(h.id,-1)} style={{width:36,height:36,borderRadius:"50%",border:`2px solid ${ac}44`,background:"transparent",color:ac,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,lineHeight:1}}>−</button>
+                  <button onClick={()=>logHabit(h.id,1)} style={{width:36,height:36,borderRadius:"50%",border:"none",background:ac,color:"#fff",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,lineHeight:1}}>＋</button>
+                </div>
+
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",background:C.muted+"33",borderRadius:8,marginBottom:10}}>
+                  <span style={{fontSize:12,color:C.sub}}>{statsView==="week"?"本周":"本月"}合计</span>
+                  <span style={{fontSize:15,fontWeight:700,color:isBad&&periodCount>0?"#f5a623":ac}}>
+                    {periodCount} {h.unit}
+                    {isBad&&periodCount>0&&<span style={{fontSize:11,marginLeft:6,color:"#f5a623"}}>⚠ 注意</span>}
+                  </span>
+                </div>
+
+                <div style={{display:"flex",gap:4}}>
+                  {Array.from({length:7},(_,k)=>{
+                    const d=new Date();d.setDate(d.getDate()-6+k);
+                    const dk=d.toISOString().slice(0,10);
+                    const c=getCount(h.id,dk);
+                    const isToday=dk===today();
+                    return(
+                      <div key={dk} style={{flex:1,textAlign:"center"}}>
+                        <div style={{fontSize:9,color:isToday?ac:C.muted,marginBottom:3}}>{"日一二三四五六"[d.getDay()]}</div>
+                        <div style={{height:26,borderRadius:6,background:c>0?ac+(isBad?"55":"88"):"#1e1e2a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:c>0?"#fff":C.muted,border:isToday?`1.5px solid ${ac}`:"1.5px solid transparent",transition:"background 0.2s"}}>
+                          {c>0?c:"·"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </>)}
+
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({t,i,C,setProgress,toggleDone,onDelete,onEdit,done}) {
+  const lb=TASK_LABELS.find(l=>l.id===t.label)||TASK_LABELS[0];
+  const isOverdue=t.deadline&&new Date(t.deadline)<new Date()&&!t.done;
+  return(
+    <div className="card" style={{animationDelay:`${i*0.04}s`,background:done?"#13131a":C.surface,border:`1.5px solid ${isOverdue?"#e05c5c55":lb.color+"44"}`,borderRadius:14,padding:16,marginBottom:10,opacity:done?0.5:1}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+        <div onClick={()=>toggleDone(t.id)} style={{width:20,height:20,borderRadius:6,border:`2px solid ${t.done?C.ok:lb.color}`,background:t.done?C.ok+"33":"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,marginTop:2,transition:"all 0.2s"}}>
+          {t.done&&<span style={{color:C.ok,fontSize:12}}>✓</span>}
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+            <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:lb.color+"22",color:lb.color,fontWeight:600,whiteSpace:"nowrap"}}>{lb.label}</span>
+            <div style={{fontSize:14,fontWeight:500,color:t.done?C.sub:C.text,textDecoration:t.done?"line-through":"none",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</div>
+            <button className="del" onClick={()=>onDelete(t.id)} style={{background:"transparent",border:"none",color:C.muted,fontSize:15,cursor:"pointer",padding:"2px 4px",lineHeight:1,flexShrink:0}}>✕</button>
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:t.done?0:10}}>
+            {t.estimatedHours>0&&<span style={{fontSize:10,color:C.sub,background:C.muted+"55",padding:"2px 7px",borderRadius:20}}>⏱ {t.estimatedHours}h</span>}
+            {t.deadline&&<span style={{fontSize:10,color:isOverdue?"#e05c5c":C.sub,background:isOverdue?"#e05c5c22":C.muted+"55",padding:"2px 7px",borderRadius:20}}>{isOverdue?"⚠ ":"📅 "}{fmtDL(t.deadline)}</span>}
+            {t.inWeekPlan&&!t.done&&<span style={{fontSize:10,color:C.accent,background:C.accentSoft,padding:"2px 7px",borderRadius:20}}>本周</span>}
+          </div>
+          {!t.done&&(
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                <span style={{fontSize:11,color:C.sub}}>进度</span>
+                <span style={{fontSize:11,fontWeight:600,color:t.progress===100?C.ok:lb.color}}>{t.progress}%</span>
+              </div>
+              <input type="range" min={0} max={100} step={5} value={t.progress} onChange={e=>setProgress(t.id,parseInt(e.target.value))} style={{width:"100%",cursor:"pointer"}}/>
+              <div style={{display:"flex",gap:3,marginTop:5}}>
+                {[0,25,50,75,100].map(v=>(
+                  <button key={v} onClick={()=>setProgress(t.id,v)} style={{flex:1,padding:"3px 0",background:t.progress===v?lb.color:C.muted+"55",border:"none",borderRadius:5,color:t.progress===v?"#fff":C.sub,fontSize:10,cursor:"pointer",transition:"all 0.15s"}}>{v}%</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      {!t.done&&(
+        <button onClick={()=>onEdit(t)} style={{marginTop:10,width:"100%",padding:"7px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,color:C.sub,fontSize:12,cursor:"pointer"}}>✏ 编辑</button>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
