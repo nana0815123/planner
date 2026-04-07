@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="生长日记">
+<title>生长日记</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#fdf9f3;--surface:#fff;--green:#4a7c59;--gl:#eef6f0;--gm:#b8d8c0;--amber:#d4860a;--al:#fef4e4;--blue:#5b8fa8;--bl:#e8f4f8;--rose:#c4614a;--rl:#fdf0ee;--purple:#7a5a9a;--pl:#f0ecf8;--text:#2c3e2d;--sub:#6b8c6e;--muted:#a8c0a8;--border:#ddeedd;--sh:rgba(74,124,89,0.08)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);font-family:'DM Sans','PingFang SC',sans-serif;color:var(--text);min-height:100vh;overflow-x:hidden}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:var(--gm);border-radius:4px}
+input,textarea,button,select{font-family:inherit}
+input[type=range]{accent-color:var(--green)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes popIn{from{opacity:0;transform:scale(0.96) translateY(6px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}
+.card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 2px 12px var(--sh);animation:fadeIn 0.25s ease both}
+.ifld{background:#fff;border:1.5px solid var(--border);color:var(--text);border-radius:12px;padding:10px 14px;width:100%;font-size:14px;transition:border-color 0.2s}
+.ifld:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(74,124,89,0.1)}
+.ifld::placeholder{color:var(--muted)}
+.isel{background:#fff;border:1.5px solid var(--border);color:var(--text);border-radius:12px;padding:10px 14px;width:100%;font-size:14px}
+.isel:focus{outline:none;border-color:var(--green)}
+.pbtn{background:var(--green);color:#fff;border:none;border-radius:12px;padding:11px 18px;font-size:14px;font-weight:600;cursor:pointer;width:100%}
+.pbtn:active{background:#3a6448}
+.sbtn{background:#fff;color:var(--green);border:1.5px solid var(--gm);border-radius:12px;padding:11px 18px;font-size:14px;cursor:pointer}
+.sbtn:active{background:var(--gl)}
+.dbtn{background:#fff;border:1.5px dashed var(--gm);border-radius:14px;padding:13px;color:var(--green);font-size:14px;font-weight:500;cursor:pointer;width:100%}
+.hrow{cursor:pointer;border-radius:10px;transition:background 0.15s}
+.hrow:active{background:var(--gl)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+
+// utils
+function uid(){return Math.random().toString(36).slice(2,10)}
+function today(){return new Date().toISOString().slice(0,10)}
+function fmtDate(d){if(!d)return"";const dt=new Date(d+' ');return`${dt.getMonth()+1}月${dt.getDate()}日`}
+function fmtTime(){const d=new Date();return`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}
+function monthKey(){return new Date().toISOString().slice(0,7)}
+function weekStart(){const d=new Date(),day=d.getDay()||7;d.setHours(0,0,0,0);d.setDate(d.getDate()-day+1);return d}
+function getWeekDates(offset=0){const ws=weekStart();ws.setDate(ws.getDate()+offset*7);return Array.from({length:7},(_,i)=>{const d=new Date(ws);d.setDate(ws.getDate()+i);return d.toISOString().slice(0,10)})}
+function getMonthDates(){const y=new Date().getFullYear(),m=new Date().getMonth(),days=new Date(y,m+1,0).getDate();return Array.from({length:days},(_,i)=>new Date(y,m,i+1).toISOString().slice(0,10))}
+function getPeriodDates(p){return p==="week"?getWeekDates():getMonthDates()}
+
+// Claude API call
+async function callClaude(apiKey,imageBase64,mediaType,prompt){
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mediaType,data:imageBase64}},{type:"text",text:prompt}]}]})});
+  const data=await r.json();
+  return data.content[0].text.trim().replace(/```json|```/g,"");
+}
+
+async function fileToBase64(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file)})}
+
+const QUOTES=[
+  {t:"我不是一个人，而是无数人，但又什么都不是。",a:"弗吉尼亚·伍尔夫"},
+  {t:"我们活着，就是为了发现光明。其他一切都是等待。",a:"赫尔曼·黑塞"},
+  {t:"在严冬，我终于知道，我身上有一个不可战胜的夏天。",a:"阿尔贝·加缪"},
+  {t:"不管全世界所有人怎么说，我都认为自己的感受才是正确的。",a:"村上春树"},
+  {t:"你若爱，生活哪里都可爱。",a:"林徽因"},
+  {t:"生命不是你活了多少日子，而是你记住了多少日子。",a:"保罗·柯艾略"},
+  {t:"我只愿面朝大海，春暖花开。",a:"海子"},
+  {t:"愿你有好运气，如果没有，愿你在不幸中学会慈悲。",a:"玛格丽特·阿特伍德"},
+  {t:"每一个不曾起舞的日子，都是对生命的辜负。",a:"尼采"},
+  {t:"做一个生活的观察者，然后慢慢变成参与者。",a:"史铁生"},
+  {t:"世界上只有一种真正的英雄主义，那就是认清生活的真相后依然热爱生活。",a:"罗曼·罗兰"},
+  {t:"我存在，我生活，我感受。",a:"赫尔曼·黑塞"},
+];
+
+const TASK_TYPES=[
+  {id:"book",label:"读书",icon:"📚",unit:"页",color:"#4a7c59"},
+  {id:"movie",label:"电影",icon:"🎬",unit:"部",color:"#5b8fa8"},
+  {id:"series",label:"剧集",icon:"📺",unit:"集",color:"#7a6aa0"},
+  {id:"course",label:"课程",icon:"🎓",unit:"节",color:"#d4860a"},
+  {id:"writing",label:"写作",icon:"✍️",unit:"字",color:"#c4614a"},
+  {id:"travel",label:"旅行",icon:"✈️",unit:"天",color:"#4a8a8a"},
+  {id:"game",label:"游戏",icon:"🎮",unit:"小时",color:"#7a5a9a"},
+];
+
+const SAVE_KEY="life_v2";
+function load(){try{return JSON.parse(localStorage.getItem(SAVE_KEY))||{}}catch(e){return{}}}
+
+// ═══════════════════════════ APP ═══════════════════════════
+function App(){
+  const s=load();
+  const [page,setPage]=useState("today");
+  const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [apiKey,setApiKey]=useState(localStorage.getItem("claude_key")||"");
+  const [showKeyInput,setShowKeyInput]=useState(false);
+  const [habits,setHabits]=useState(s.habits||[]);
+  const [habitLogs,setHabitLogs]=useState(s.habitLogs||{});
+  const [tasks,setTasks]=useState(s.tasks||[]);
+  const [meals,setMeals]=useState(s.meals||[]);
+  const [exercises,setExercises]=useState(s.exercises||[]);
+  const [sunLogs,setSunLogs]=useState(s.sunLogs||[]);
+  const [screenLogs,setScreenLogs]=useState(s.screenLogs||[]);
+  const [sleepLogs,setSleepLogs]=useState(s.sleepLogs||[]);
+  const [notes,setNotes]=useState(s.notes||[]);
+
+  useEffect(()=>{localStorage.setItem(SAVE_KEY,JSON.stringify({habits,habitLogs,tasks,meals,exercises,sunLogs,screenLogs,sleepLogs,notes}))},[habits,habitLogs,tasks,meals,exercises,sunLogs,screenLogs,sleepLogs,notes]);
+
+  const saveKey=k=>{localStorage.setItem("claude_key",k);setApiKey(k);setShowKeyInput(false)};
+
+  const quote=useMemo(()=>QUOTES[new Date().getDate()%QUOTES.length],[]);
+
+  const goodHabits=habits.filter(h=>h.type!=="bad");
+  const badHabits=habits.filter(h=>h.type==="bad");
+  const todayHabitDone=goodHabits.filter(h=>(habitLogs[h.id]||{})[today()]>0).length;
+  const todayBadCount=badHabits.filter(h=>(habitLogs[h.id]||{})[today()]>0).length;
+  const todayExercise=exercises.filter(e=>e.date===today()).reduce((s,e)=>s+parseInt(e.duration||0),0);
+  const todaySun=sunLogs.filter(l=>l.date===today()).reduce((s,l)=>s+l.minutes,0);
+  const todayScreen=screenLogs.find(l=>l.date===today());
+  const todayMeals=meals.filter(m=>m.date===today());
+  const todayMealAvg=todayMeals.length?Math.round(todayMeals.reduce((s,m)=>s+m.total,0)/todayMeals.length):null;
+  const todaySleep=sleepLogs.find(l=>l.date===today());
+
+  const nav=p=>{setPage(p);setSidebarOpen(false)};
+
+  const PAGES=[
+    {id:"today",label:"今日总览",icon:"🌅"},
+    {id:"habits",label:"习惯打卡",icon:"🌱"},
+    {id:"tasks",label:"任务进度",icon:"📚"},
+    {id:"meals",label:"饮食记录",icon:"🍽"},
+    {id:"exercise",label:"运动记录",icon:"🏃"},
+    {id:"sleep",label:"睡眠记录",icon:"🌙"},
+    {id:"sun",label:"晒太阳",icon:"☀️"},
+    {id:"screen",label:"屏幕时间",icon:"📱"},
+    {id:"notes",label:"生活笔记",icon:"📝"},
+    {id:"report",label:"生成周报",icon:"📋"},
+  ];
+
+  return (
+    <div style={{minHeight:"100vh",background:"var(--bg)"}}>
+      {sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(44,62,45,0.35)",zIndex:200,backdropFilter:"blur(2px)"}}/>}
+
+      {/* SIDEBAR */}
+      <div style={{position:"fixed",left:0,top:0,bottom:0,width:250,background:"#fff",zIndex:300,boxShadow:"4px 0 24px rgba(74,124,89,0.12)",transform:sidebarOpen?"translateX(0)":"translateX(-100%)",transition:"transform 0.3s ease",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"48px 20px 16px",borderBottom:"1px solid var(--border)"}}>
+          <div style={{fontFamily:"Lora,serif",fontSize:20,fontWeight:600,color:"var(--green)"}}>生长日记</div>
+          <div style={{fontSize:12,color:"var(--sub)",marginTop:2}}>记录生活，感受成长</div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"10px 8px"}}>
+          {PAGES.map(p=>(
+            <button key={p.id} onClick={()=>nav(p.id)} style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"11px 12px",borderRadius:12,border:"none",background:page===p.id?"var(--gl)":"transparent",color:page===p.id?"var(--green)":"var(--text)",fontWeight:page===p.id?600:400,fontSize:14,cursor:"pointer",marginBottom:2,textAlign:"left"}}>
+              <span style={{fontSize:18}}>{p.icon}</span>{p.label}
+            </button>
+          ))}
+        </div>
+        <div style={{padding:"14px 16px",borderTop:"1px solid var(--border)"}}>
+          {!showKeyInput
+            ? <button onClick={()=>setShowKeyInput(true)} style={{width:"100%",padding:"9px",background:apiKey?"var(--gl)":"var(--al)",border:`1px solid ${apiKey?"var(--gm)":"#f0d090"}`,borderRadius:10,color:apiKey?"var(--green)":"var(--amber)",fontSize:12,cursor:"pointer",fontWeight:500}}>{apiKey?"🔑 API Key 已设置":"🔑 设置 API Key"}</button>
+            : <div style={{animation:"popIn 0.2s ease"}}>
+                <input className="ifld" id="ki" placeholder="粘贴 sk-ant-... Key" defaultValue={apiKey} style={{marginBottom:8,fontSize:12}}/>
+                <div style={{display:"flex",gap:6}}>
+                  <button className="pbtn" style={{padding:"8px",fontSize:12}} onClick={()=>{const v=document.getElementById("ki").value.trim();if(v)saveKey(v)}}>保存</button>
+                  <button className="sbtn" style={{padding:"8px 12px",fontSize:12}} onClick={()=>setShowKeyInput(false)}>取消</button>
+                </div>
+              </div>
+          }
+        </div>
+      </div>
+
+      {/* TOP BAR */}
+      <div style={{position:"sticky",top:0,zIndex:100,background:"rgba(253,249,243,0.92)",backdropFilter:"blur(8px)",borderBottom:"1px solid var(--border)"}}>
+        <div style={{maxWidth:560,margin:"0 auto",display:"flex",alignItems:"center",height:52,padding:"0 16px",gap:12}}>
+          <button onClick={()=>setSidebarOpen(true)} style={{width:36,height:36,borderRadius:10,border:"none",background:"var(--gl)",color:"var(--green)",fontSize:18,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>☰</button>
+          <div style={{flex:1,fontFamily:"Lora,serif",fontSize:16,fontWeight:600}}>{PAGES.find(p=>p.id===page)?.icon} {PAGES.find(p=>p.id===page)?.label}</div>
+          <div style={{fontSize:12,color:"var(--sub)"}}>{new Date().toLocaleDateString("zh-CN",{month:"short",day:"numeric"})}</div>
+        </div>
+      </div>
+
+      {/* CONTENT */}
+      <div style={{maxWidth:560,margin:"0 auto",padding:"16px 16px 80px"}}>
+        {page==="today"&&<TodayPage quote={quote} goodHabits={goodHabits} badHabits={badHabits} habitLogs={habitLogs} tasks={tasks} todayMealAvg={todayMealAvg} todayMeals={todayMeals} todayExercise={todayExercise} todaySun={todaySun} todayScreen={todayScreen} todayHabitDone={todayHabitDone} todayBadCount={todayBadCount} todaySleep={todaySleep} nav={nav}/>}
+        {page==="habits"&&<HabitsPage habits={habits} setHabits={setHabits} logs={habitLogs} setLogs={setHabitLogs}/>}
+        {page==="tasks"&&<TasksPage tasks={tasks} setTasks={setTasks}/>}
+        {page==="meals"&&<MealsPage meals={meals} setMeals={setMeals}/>}
+        {page==="exercise"&&<ExercisePage exercises={exercises} setExercises={setExercises} apiKey={apiKey}/>}
+        {page==="sleep"&&<SleepPage logs={sleepLogs} setLogs={setSleepLogs} apiKey={apiKey}/>}
+        {page==="sun"&&<SunPage logs={sunLogs} setLogs={setSunLogs}/>}
+        {page==="screen"&&<ScreenPage logs={screenLogs} setLogs={setScreenLogs} apiKey={apiKey}/>}
+        {page==="notes"&&<NotesPage notes={notes} setNotes={setNotes}/>}
+        {page==="report"&&<ReportPage habits={habits} habitLogs={habitLogs} tasks={tasks} meals={meals} exercises={exercises} sunLogs={sunLogs} screenLogs={screenLogs} sleepLogs={sleepLogs}/>}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════ TODAY PAGE ══════════════════
+function TodayPage({quote,goodHabits,badHabits,habitLogs,tasks,todayMealAvg,todayMeals,todayExercise,todaySun,todayScreen,todayHabitDone,todayBadCount,todaySleep,nav}){
+  const habitPct=goodHabits.length?Math.round(todayHabitDone/goodHabits.length*100):0;
+  const activeTasks=tasks.filter(t=>t.current<t.total);
+  const wd=["日","一","二","三","四","五","六"][new Date().getDay()];
+  return (
+    <div>
+      <div style={{background:"linear-gradient(135deg,#eef6f0,#fef9f0,#e8f4f8)",border:"1px solid var(--border)",borderRadius:20,padding:"20px 20px 16px",marginBottom:16,position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",right:16,top:10,fontSize:40,opacity:0.1}}>🌿</div>
+        <div style={{fontSize:11,color:"var(--sub)",letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>星期{wd} · 每日一言</div>
+        <div style={{fontFamily:"Lora,serif",fontSize:15,lineHeight:1.7,color:"var(--text)",fontStyle:"italic",marginBottom:8}}>「{quote.t}」</div>
+        <div style={{fontSize:12,color:"var(--sub)",textAlign:"right"}}>—— {quote.a}</div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <Stat icon="🌱" label="正向习惯" value={`${todayHabitDone}/${goodHabits.length}`} sub={`${habitPct}%`} color="var(--green)" bg="var(--gl)" onClick={()=>nav("habits")}/>
+        <Stat icon="🍽" label="饮食评分" value={todayMealAvg!==null?todayMealAvg+"分":"未记录"} sub={todayMeals.length?`${todayMeals.length}餐`:"今日"} color="var(--rose)" bg="var(--rl)" onClick={()=>nav("meals")}/>
+        <Stat icon="🏃" label="运动时长" value={todayExercise?todayExercise+"分钟":"未记录"} sub="今日" color="var(--blue)" bg="var(--bl)" onClick={()=>nav("exercise")}/>
+        <Stat icon="☀️" label="晒太阳" value={todaySun?todaySun+"分钟":"未记录"} sub="今日" color="var(--amber)" bg="var(--al)" onClick={()=>nav("sun")}/>
+        <Stat icon="🌙" label="睡眠" value={todaySleep?todaySleep.duration+"h":"未记录"} sub={todaySleep?`质量${todaySleep.quality}分`:"今日"} color="var(--purple)" bg="var(--pl)" onClick={()=>nav("sleep")}/>
+        <Stat icon="📱" label="屏幕时间" value={todayScreen?todayScreen.total+"分钟":"未记录"} sub="今日" color="#7a6aa0" bg="#f4f0f8" onClick={()=>nav("screen")}/>
+      </div>
+
+      {badHabits.length>0&&(
+        <div onClick={()=>nav("habits")} className="card" style={{marginBottom:10,display:"flex",alignItems:"center",gap:14,cursor:"pointer",background:todayBadCount>0?"#fffbf0":"var(--gl)",border:`1px solid ${todayBadCount>0?"#f0d890":"var(--gm)"}`}}>
+          <span style={{fontSize:22}}>⚠️</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:11,color:"var(--sub)",marginBottom:2}}>反向习惯 · 今日触发</div>
+            <div style={{fontSize:18,fontWeight:700,color:todayBadCount>0?"var(--amber)":"var(--green)"}}>{todayBadCount}/{badHabits.length} 项</div>
+          </div>
+          <div style={{fontSize:13,fontWeight:600,color:todayBadCount>0?"var(--amber)":"var(--green)"}}>{todayBadCount>0?"注意⚠":"良好✓"}</div>
+        </div>
+      )}
+
+      {activeTasks.length>0&&(
+        <div className="card">
+          <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--green)",marginBottom:12,fontStyle:"italic"}}>进行中的任务</div>
+          {activeTasks.slice(0,4).map(t=>{
+            const tp=TASK_TYPES.find(x=>x.id===t.type)||TASK_TYPES[0];
+            const pct=Math.round(t.current/t.total*100);
+            return (
+              <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                <span style={{fontSize:16}}>{tp.icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,marginBottom:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.title}</div>
+                  <div style={{height:5,background:"#e8f0e4",borderRadius:3,overflow:"hidden"}}>
+                    <div style={{width:`${pct}%`,height:"100%",background:tp.color,borderRadius:3,transition:"width 0.3s"}}/>
+                  </div>
+                </div>
+                <div style={{fontSize:12,color:"var(--sub)",minWidth:30,textAlign:"right"}}>{pct}%</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({icon,label,value,sub,color,bg,onClick}){
+  return (
+    <div onClick={onClick} className="card" style={{background:bg,cursor:"pointer",textAlign:"left",padding:"14px"}}>
+      <div style={{fontSize:22,marginBottom:8}}>{icon}</div>
+      <div style={{fontSize:11,color:"var(--sub)",marginBottom:3}}>{label}</div>
+      <div style={{fontSize:17,fontWeight:700,color,lineHeight:1.2}}>{value}</div>
+      <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{sub}</div>
+    </div>
+  );
+}
+
+// ══════════════════ HABITS PAGE ══════════════════
+function HabitsPage({habits,setHabits,logs,setLogs}){
+  const [view,setView]=useState("checkin");
+  const [period,setPeriod]=useState("week");
+  const [expanded,setExpanded]=useState(null);
+  const [showForm,setShowForm]=useState(false);
+  const [form,setForm]=useState({title:"",emoji:"🌿",type:"good",unit:"次"});
+  const [logDate,setLogDate]=useState(today());
+  const [editing,setEditing]=useState(null);
+
+  const logHabit=(hid,delta)=>{
+    setLogs(prev=>{const hl={...(prev[hid]||{})};hl[logDate]=Math.max(0,(hl[logDate]||0)+delta);return{...prev,[hid]:hl}});
+  };
+  const getCount=(hid,d)=>(logs[hid]||{})[d]||0;
+  const getPCount=(hid,p)=>{const hl=logs[hid]||{};return getPeriodDates(p).reduce((s,d)=>s+(hl[d]||0),0)};
+  const getPDays=(hid,p)=>{const hl=logs[hid]||{};return getPeriodDates(p).filter(d=>(hl[d]||0)>0).length};
+  const saveHabit=()=>{if(!form.title.trim())return;setHabits(p=>[{id:uid(),...form},...p]);setForm({title:"",emoji:"🌿",type:"good",unit:"次"});setShowForm(false)};
+  const saveEdit=()=>{if(!editing.title.trim())return;setHabits(p=>p.map(h=>h.id===editing.id?{...h,...editing}:h));setEditing(null)};
+
+  return (
+    <div>
+      {/* edit modal */}
+      {editing&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(44,62,45,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={()=>setEditing(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:20,padding:24,width:"100%",maxWidth:340,boxShadow:"0 8px 40px var(--sh)",animation:"popIn 0.2s ease"}}>
+            <div style={{fontFamily:"Lora,serif",fontSize:16,fontWeight:600,color:"var(--green)",marginBottom:16,fontStyle:"italic"}}>编辑习惯</div>
+            <div style={{display:"flex",gap:8,marginBottom:10}}>
+              <input className="ifld" value={editing.emoji} onChange={e=>setEditing(v=>({...v,emoji:e.target.value}))} style={{flex:"0 0 64px",textAlign:"center",fontSize:20}}/>
+              <input className="ifld" placeholder="习惯名称" value={editing.title} onChange={e=>setEditing(v=>({...v,title:e.target.value}))}/>
+            </div>
+            <input className="ifld" placeholder="单位" value={editing.unit} onChange={e=>setEditing(v=>({...v,unit:e.target.value}))} style={{marginBottom:16}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button className="pbtn" onClick={saveEdit}>保存</button>
+              <button className="sbtn" onClick={()=>setEditing(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:6,marginBottom:14,background:"#fff",borderRadius:12,padding:4,border:"1px solid var(--border)"}}>
+        {[["checkin","打卡"],["overview","总览"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{flex:1,padding:"8px",borderRadius:9,border:"none",background:view===k?"var(--green)":"transparent",color:view===k?"#fff":"var(--sub)",fontWeight:view===k?600:400,fontSize:13,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+
+      {view==="checkin"&&(
+        <div>
+          {!showForm&&<button className="dbtn" onClick={()=>setShowForm(true)} style={{marginBottom:12}}>＋ 添加习惯</button>}
+          {showForm&&(
+            <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+              <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--green)",marginBottom:12,fontStyle:"italic"}}>新建习惯</div>
+              <input className="ifld" placeholder="习惯名称，如：吃维生素" value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} style={{marginBottom:8}}/>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input className="ifld" value={form.emoji} onChange={e=>setForm(f=>({...f,emoji:e.target.value}))} style={{flex:"0 0 64px",textAlign:"center",fontSize:20}}/>
+                <select className="isel" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))} style={{flex:1}}>
+                  <option value="good">✅ 正向（越多越好）</option>
+                  <option value="bad">⚠️ 反向（越少越好）</option>
+                </select>
+              </div>
+              <input className="ifld" placeholder="单位（次、杯、小时…）" value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{marginBottom:14}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button className="pbtn" onClick={saveHabit}>添加</button>
+                <button className="sbtn" onClick={()=>setShowForm(false)}>取消</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,background:"#fff",border:"1px solid var(--border)",borderRadius:12,padding:"8px 12px"}}>
+            <span style={{fontSize:13,color:"var(--sub)",flexShrink:0}}>📅 打卡日期</span>
+            <input type="date" value={logDate} max={today()} onChange={e=>setLogDate(e.target.value)} style={{flex:1,border:"none",fontSize:13,color:"var(--text)",outline:"none",background:"transparent"}}/>
+            {logDate!==today()&&<span style={{fontSize:11,color:"var(--amber)",fontWeight:600}}>补打卡</span>}
+          </div>
+
+          {habits.length===0&&<Empty icon="🌱" text="还没有习惯，添加第一个吧"/>}
+          <div style={{background:"#fff",border:"1px solid var(--border)",borderRadius:16,overflow:"hidden",boxShadow:"0 2px 12px var(--sh)"}}>
+            {habits.map((h,i)=>{
+              const isBad=h.type==="bad";
+              const ac=isBad?"var(--amber)":"var(--green)";
+              const isExp=expanded===h.id;
+              const cnt=getCount(h.id,logDate);
+              return (
+                <div key={h.id}>
+                  {i>0&&<div style={{height:1,background:"#f0f7ec",marginLeft:16}}/>}
+                  <div className="hrow" style={{display:"flex",alignItems:"center",gap:12,padding:"13px 16px"}} onClick={()=>setExpanded(isExp?null:h.id)}>
+                    <span style={{fontSize:22,flexShrink:0}}>{h.emoji}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:14,fontWeight:500}}>{h.title}</div>
+                      <div style={{fontSize:11,color:isBad?"var(--amber)":"var(--sub)"}}>{isBad?"⚠ 反向":"✅ 正向"} · {h.unit}</div>
+                    </div>
+                    <button onClick={e=>{e.stopPropagation();logHabit(h.id,-1)}} style={{width:32,height:32,borderRadius:"50%",border:`1.5px solid ${isBad?"#f0d090":"var(--gm)"}`,background:"#fff",color:ac,fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>−</button>
+                    <div style={{fontSize:20,fontWeight:700,color:ac,minWidth:28,textAlign:"center"}}>{cnt}</div>
+                    <button onClick={e=>{e.stopPropagation();logHabit(h.id,1)}} style={{width:32,height:32,borderRadius:"50%",border:"none",background:isBad?"var(--amber)":"var(--green)",color:"#fff",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>＋</button>
+                    <span style={{fontSize:11,color:"var(--muted)",marginLeft:2}}>{isExp?"▲":"▼"}</span>
+                  </div>
+                  {isExp&&(
+                    <div style={{background:"#f8fbf6",borderTop:"1px solid var(--border)",padding:"12px 16px 14px",animation:"popIn 0.18s ease"}}>
+                      <div style={{display:"flex",gap:4,marginBottom:10}}>
+                        {Array.from({length:7},(_,k)=>{
+                          const d=new Date();d.setDate(d.getDate()-6+k);
+                          const dk=d.toISOString().slice(0,10);
+                          const c=getCount(h.id,dk);
+                          const isT=dk===today();
+                          return (
+                            <div key={dk} style={{flex:1,textAlign:"center"}}>
+                              <div style={{fontSize:9,color:isT?ac:"var(--muted)",marginBottom:3}}>{"日一二三四五六"[d.getDay()]}</div>
+                              <div style={{height:28,borderRadius:7,background:c>0?(isBad?"#fde8c0":"#b8d8c0"):"#e8f0e4",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:600,color:c>0?(isBad?"#a06010":"#2a6040"):"var(--muted)",border:isT?`1.5px solid ${ac}`:"1.5px solid transparent"}}>{c>0?c:"·"}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{display:"flex",gap:8,marginBottom:8}}>
+                        <div style={{flex:1,background:"#fff",borderRadius:10,padding:"8px",border:"1px solid var(--border)",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"var(--sub)"}}>本周</div>
+                          <div style={{fontSize:16,fontWeight:700,color:ac}}>{getPCount(h.id,"week")}<span style={{fontSize:11,fontWeight:400,color:"var(--muted)"}}>{h.unit}</span></div>
+                        </div>
+                        <div style={{flex:1,background:"#fff",borderRadius:10,padding:"8px",border:"1px solid var(--border)",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"var(--sub)"}}>本月</div>
+                          <div style={{fontSize:16,fontWeight:700,color:ac}}>{getPCount(h.id,"month")}<span style={{fontSize:11,fontWeight:400,color:"var(--muted)"}}>{h.unit}</span></div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:6}}>
+                        <button onClick={()=>setEditing({id:h.id,title:h.title,emoji:h.emoji,unit:h.unit})} style={{flex:1,padding:"8px",background:"#fff",border:"1px solid var(--gm)",borderRadius:10,color:"var(--green)",fontSize:12,cursor:"pointer"}}>✏ 重命名</button>
+                        <button onClick={()=>{if(window.confirm("删除这个习惯？"))setHabits(p=>p.filter(x=>x.id!==h.id))}} style={{flex:1,padding:"8px",background:"#fff",border:"1px solid #f0d0c8",borderRadius:10,color:"var(--rose)",fontSize:12,cursor:"pointer"}}>删除</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {view==="overview"&&(
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            {[["week","本周"],["month","本月"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setPeriod(k)} style={{padding:"6px 18px",borderRadius:20,border:`1.5px solid ${period===k?"var(--green)":"var(--border)"}`,background:period===k?"var(--gl)":"#fff",color:period===k?"var(--green)":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
+          {habits.length===0&&<Empty icon="🌱" text="还没有习惯记录"/>}
+          {habits.map((h,i)=>{
+            const total=getPCount(h.id,period);
+            const days=getPDays(h.id,period);
+            const pd=getPeriodDates(period);
+            const pct=pd.length?Math.round(days/pd.length*100):0;
+            const isBad=h.type==="bad";
+            const ac=isBad?"var(--amber)":"var(--green)";
+            return (
+              <div key={h.id} className="card" style={{marginBottom:10,animationDelay:`${i*0.04}s`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                  <span style={{fontSize:22}}>{h.emoji}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:14,fontWeight:600}}>{h.title}</div>
+                    <div style={{fontSize:11,color:isBad?"var(--amber)":"var(--sub)"}}>{isBad?"⚠ 反向":"✅ 正向"}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:22,fontWeight:700,color:isBad&&total>0?"var(--amber)":ac}}>{total}</div>
+                    <div style={{fontSize:11,color:"var(--muted)"}}>{h.unit}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:10}}>
+                  {[["打卡天数",`${days}/${pd.length}天`],["打卡率",`${pct}%`],["日均",`${days>0?(total/days).toFixed(1):0}${h.unit}`]].map(([k,v])=>(
+                    <div key={k} style={{flex:1,background:"#f8fbf6",borderRadius:10,padding:"8px",border:"1px solid var(--border)",textAlign:"center"}}>
+                      <div style={{fontSize:10,color:"var(--sub)"}}>{k}</div>
+                      <div style={{fontSize:14,fontWeight:700,color:ac}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                  {pd.map(d=>{
+                    const c=(logs[h.id]||{})[d]||0;
+                    const isT=d===today();
+                    return (
+                      <div key={d} style={{width:period==="month"?28:36,height:period==="month"?28:36,borderRadius:7,background:c>0?(isBad?"#fde8c0":"#b8d8c0"):"#e8f0e4",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:600,color:c>0?(isBad?"#a06010":"#2a6040"):"var(--muted)",border:isT?"1.5px solid var(--green)":"1.5px solid transparent"}}>{c>0?c:"·"}</div>
+                    );
+                  })}
+                </div>
+                {isBad&&total>0&&<div style={{marginTop:10,padding:"7px 12px",background:"var(--al)",border:"1px solid #f0d090",borderRadius:8,fontSize:12,color:"var(--amber)"}}>⚠ 本{period==="week"?"周":"月"}共 {total} {h.unit}，注意改善</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════ TASKS PAGE ══════════════════
+function TasksPage({tasks,setTasks}){
+  const [showForm,setShowForm]=useState(false);
+  const [form,setForm]=useState({title:"",type:"book",total:"",notes:""});
+  const [filter,setFilter]=useState("all");
+  const [editing,setEditing]=useState(null);
+
+  const saveTask=()=>{
+    if(!form.title.trim()||!form.total)return;
+    setTasks(p=>[{id:uid(),...form,total:parseFloat(form.total),current:0,startDate:today()},...p]);
+    setForm({title:"",type:"book",total:"",notes:""});setShowForm(false);
+  };
+  const saveEdit=()=>{if(!editing.title.trim())return;setTasks(p=>p.map(t=>t.id===editing.id?{...t,title:editing.title,notes:editing.notes}:t));setEditing(null)};
+  const setProgress=(id,v)=>setTasks(p=>p.map(t=>t.id===id?{...t,current:Math.min(t.total,Math.max(0,v))}:t));
+
+  const filtered=filter==="all"?tasks:tasks.filter(t=>t.type===filter);
+  const active=filtered.filter(t=>t.current<t.total);
+  const done=filtered.filter(t=>t.current>=t.total);
+
+  return (
+    <div>
+      {editing&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(44,62,45,0.4)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={()=>setEditing(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:20,padding:24,width:"100%",maxWidth:340,boxShadow:"0 8px 40px var(--sh)",animation:"popIn 0.2s ease"}}>
+            <div style={{fontFamily:"Lora,serif",fontSize:16,fontWeight:600,color:"var(--green)",marginBottom:16,fontStyle:"italic"}}>编辑任务</div>
+            <input className="ifld" placeholder="任务名称" value={editing.title} onChange={e=>setEditing(v=>({...v,title:e.target.value}))} style={{marginBottom:10}}/>
+            <textarea className="ifld" placeholder="备注（可选）" value={editing.notes||""} onChange={e=>setEditing(v=>({...v,notes:e.target.value}))} rows={2} style={{marginBottom:16,resize:"none"}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button className="pbtn" onClick={saveEdit}>保存</button>
+              <button className="sbtn" onClick={()=>setEditing(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:6,marginBottom:12,overflowX:"auto",paddingBottom:2}}>
+        <button onClick={()=>setFilter("all")} style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${filter==="all"?"var(--green)":"var(--border)"}`,background:filter==="all"?"var(--green)":"#fff",color:filter==="all"?"#fff":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>全部</button>
+        {TASK_TYPES.map(tp=>(
+          <button key={tp.id} onClick={()=>setFilter(tp.id)} style={{padding:"5px 12px",borderRadius:20,border:`1.5px solid ${filter===tp.id?tp.color:"var(--border)"}`,background:filter===tp.id?tp.color+"22":"#fff",color:filter===tp.id?tp.color:"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{tp.icon} {tp.label}</button>
+        ))}
+      </div>
+
+      {!showForm&&<button className="dbtn" onClick={()=>setShowForm(true)} style={{marginBottom:12}}>＋ 新建任务</button>}
+      {showForm&&(
+        <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+          <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--green)",marginBottom:12,fontStyle:"italic"}}>新建任务</div>
+          <input className="ifld" placeholder="任务名称，如：《百年孤独》" value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} style={{marginBottom:8}}/>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <select className="isel" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))} style={{flex:1}}>
+              {TASK_TYPES.map(tp=><option key={tp.id} value={tp.id}>{tp.icon} {tp.label}</option>)}
+            </select>
+            <input className="ifld" placeholder={`总${TASK_TYPES.find(tp=>tp.id===form.type)?.unit||"量"}`} type="number" min="1" value={form.total} onChange={e=>setForm(f=>({...f,total:e.target.value}))} style={{flex:"0 0 90px"}}/>
+          </div>
+          <textarea className="ifld" placeholder="备注（可选）" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} style={{marginBottom:14,resize:"none"}}/>
+          <div style={{display:"flex",gap:8}}>
+            <button className="pbtn" onClick={saveTask}>添加</button>
+            <button className="sbtn" onClick={()=>setShowForm(false)}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {active.length===0&&done.length===0&&<Empty icon="📚" text="还没有任务，添加第一个吧"/>}
+
+      {active.map((t,i)=>{
+        const tp=TASK_TYPES.find(x=>x.id===t.type)||TASK_TYPES[0];
+        const pct=Math.round(t.current/t.total*100);
+        return (
+          <div key={t.id} className="card" style={{marginBottom:10,borderLeft:`4px solid ${tp.color}`,animationDelay:`${i*0.04}s`}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <span style={{fontSize:24,flexShrink:0}}>{tp.icon}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:15,fontWeight:600,marginBottom:2}}>{t.title}</div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:tp.color+"18",color:tp.color,fontWeight:600}}>{tp.label}</span>
+                  {t.notes&&<span style={{fontSize:11,color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.notes}</span>}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:4,flexShrink:0}}>
+                <button onClick={()=>setEditing({id:t.id,title:t.title,notes:t.notes||""})} style={{padding:"4px 8px",background:"#fff",border:"1px solid var(--gm)",borderRadius:8,color:"var(--green)",fontSize:11,cursor:"pointer"}}>✏</button>
+                <button onClick={()=>setTasks(p=>p.filter(x=>x.id!==t.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:16,cursor:"pointer",padding:"2px"}}>✕</button>
+              </div>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+              <span style={{fontSize:11,color:"var(--sub)"}}>进度 {t.current}/{t.total} {tp.unit}</span>
+              <span style={{fontSize:12,fontWeight:700,color:pct===100?"var(--green)":tp.color}}>{pct}%</span>
+            </div>
+            <input type="range" min={0} max={t.total} step={1} value={t.current} onChange={e=>setProgress(t.id,parseFloat(e.target.value))} style={{width:"100%",cursor:"pointer",marginBottom:8}}/>
+            <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              <input type="number" min={0} max={t.total} value={t.current} onChange={e=>setProgress(t.id,parseFloat(e.target.value)||0)} style={{width:70,padding:"5px 8px",border:"1px solid var(--border)",borderRadius:8,fontSize:13,textAlign:"center"}}/>
+              <span style={{fontSize:12,color:"var(--sub)"}}>手动输入 {tp.unit}</span>
+            </div>
+          </div>
+        );
+      })}
+
+      {done.length>0&&(
+        <div>
+          <div style={{fontSize:11,color:"var(--muted)",textTransform:"uppercase",letterSpacing:"0.1em",margin:"16px 0 8px",paddingLeft:4}}>已完成 🎉</div>
+          {done.map((t,i)=>{
+            const tp=TASK_TYPES.find(x=>x.id===t.type)||TASK_TYPES[0];
+            return (
+              <div key={t.id} className="card" style={{marginBottom:8,opacity:0.6,borderLeft:`4px solid ${tp.color}`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:20}}>{tp.icon}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:14,fontWeight:500,textDecoration:"line-through",color:"var(--sub)"}}>{t.title}</div>
+                    <div style={{fontSize:11,color:"var(--muted)"}}>{tp.label} · {t.total}{tp.unit} ✓</div>
+                  </div>
+                  <button onClick={()=>setTasks(p=>p.filter(x=>x.id!==t.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:14,cursor:"pointer"}}>✕</button>
+                </div>
+              </div>
+            );
+          })}
+          <button onClick={()=>setTasks(p=>p.filter(t=>t.current<t.total))} style={{width:"100%",marginTop:6,padding:"9px",background:"#fff",border:"1px solid var(--border)",borderRadius:10,color:"var(--muted)",fontSize:12,cursor:"pointer"}}>清除已完成</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════ MEALS PAGE ══════════════════
+function MealsPage({meals,setMeals}){
+  const [view,setView]=useState("log");
+  const [showForm,setShowForm]=useState(false);
+  const [mealDate,setMealDate]=useState(today());
+  const [form,setForm]=useState({name:"",mealType:"breakfast",sugar:5,salt:5,skin:5,nutrition:5,notes:""});
+  const [period,setPeriod]=useState("week");
+
+  const MTYPES=[{id:"breakfast",label:"早餐",icon:"🌅"},{id:"lunch",label:"午餐",icon:"☀️"},{id:"dinner",label:"晚餐",icon:"🌙"},{id:"snack",label:"加餐",icon:"🍎"}];
+  const sc=s=>s>=7?"var(--green)":s>=5?"var(--amber)":"var(--rose)";
+
+  const saveMeal=()=>{
+    if(!form.name.trim())return;
+    const scores=[form.sugar,form.salt,form.skin,form.nutrition];
+    const total=Math.round(scores.reduce((s,v)=>s+v,0)/scores.length);
+    setMeals(p=>[{id:uid(),...form,total,date:mealDate,time:fmtTime()},...p]);
+    setForm({name:"",mealType:"breakfast",sugar:5,salt:5,skin:5,nutrition:5,notes:""});setShowForm(false);
+  };
+
+  const todayMeals=meals.filter(m=>m.date===today());
+  const periodMeals=meals.filter(m=>getPeriodDates(period).includes(m.date));
+  const avgScore=periodMeals.length?Math.round(periodMeals.reduce((s,m)=>s+m.total,0)/periodMeals.length):0;
+
+  const Bar=({label,value})=>(
+    <div style={{marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+        <span style={{fontSize:12,color:"var(--sub)"}}>{label}</span>
+        <span style={{fontSize:12,fontWeight:600,color:sc(value)}}>{value}分</span>
+      </div>
+      <div style={{height:5,background:"#e8f0e4",borderRadius:3,overflow:"hidden"}}>
+        <div style={{width:`${value*10}%`,height:"100%",background:sc(value),borderRadius:3,transition:"width 0.3s"}}/>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:14,background:"#fff",borderRadius:12,padding:4,border:"1px solid var(--border)"}}>
+        {[["log","记录"],["stats","统计"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{flex:1,padding:"8px",borderRadius:9,border:"none",background:view===k?"var(--green)":"transparent",color:view===k?"#fff":"var(--sub)",fontWeight:view===k?600:400,fontSize:13,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+
+      {view==="log"&&(
+        <div>
+          {!showForm&&<button className="dbtn" onClick={()=>setShowForm(true)} style={{marginBottom:12}}>＋ 记录一餐</button>}
+          {showForm&&(
+            <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+              <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--rose)",marginBottom:12,fontStyle:"italic"}}>记录饮食</div>
+              <input className="ifld" placeholder="这餐吃了什么" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{marginBottom:8}}/>
+              <div style={{display:"flex",gap:6,marginBottom:10,overflowX:"auto"}}>
+                {MTYPES.map(mt=>(
+                  <button key={mt.id} onClick={()=>setForm(f=>({...f,mealType:mt.id}))} style={{padding:"6px 12px",borderRadius:20,border:`1.5px solid ${form.mealType===mt.id?"var(--rose)":"var(--border)"}`,background:form.mealType===mt.id?"var(--rl)":"#fff",color:form.mealType===mt.id?"var(--rose)":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{mt.icon} {mt.label}</button>
+                ))}
+              </div>
+              <div style={{marginBottom:12}}>
+                {[["sugar","糖分控制（高分=低糖）"],["salt","盐分控制（高分=低盐）"],["skin","皮肤友好度"],["nutrition","营养均衡度"]].map(([k,l])=>(
+                  <div key={k} style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span style={{fontSize:12,color:"var(--sub)"}}>{l}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:"var(--rose)"}}>{form[k]}分</span>
+                    </div>
+                    <input type="range" min={1} max={10} step={1} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:parseInt(e.target.value)}))} style={{width:"100%",accentColor:"var(--rose)"}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                <span style={{fontSize:13,color:"var(--sub)",flexShrink:0}}>📅 日期</span>
+                <input type="date" value={mealDate} max={today()} onChange={e=>setMealDate(e.target.value)} style={{flex:1,border:"1px solid var(--border)",borderRadius:8,padding:"6px 10px",fontSize:13}}/>
+                {mealDate!==today()&&<span style={{fontSize:11,color:"var(--amber)",fontWeight:600}}>补记录</span>}
+              </div>
+              <textarea className="ifld" placeholder="备注（可选）" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} style={{marginBottom:14,resize:"none"}}/>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveMeal} style={{flex:1,padding:"11px",background:"var(--rose)",border:"none",borderRadius:12,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>保存</button>
+                <button className="sbtn" onClick={()=>setShowForm(false)}>取消</button>
+              </div>
+            </div>
+          )}
+          {todayMeals.length===0&&!showForm&&<Empty icon="🍽" text="今天还没有饮食记录"/>}
+          {todayMeals.map((m,i)=>{
+            const mt=MTYPES.find(x=>x.id===m.mealType)||MTYPES[0];
+            return (
+              <div key={m.id} className="card" style={{marginBottom:10,animationDelay:`${i*0.04}s`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <span style={{fontSize:24}}>{mt.icon}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:15,fontWeight:600}}>{m.name}</div>
+                    <div style={{fontSize:11,color:"var(--sub)"}}>{mt.label} · {m.time}</div>
+                  </div>
+                  <div style={{textAlign:"center"}}>
+                    <div style={{fontSize:22,fontWeight:700,color:sc(m.total)}}>{m.total}</div>
+                    <div style={{fontSize:10,color:"var(--muted)"}}>总分</div>
+                  </div>
+                  <button onClick={()=>setMeals(p=>p.filter(x=>x.id!==m.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:15,cursor:"pointer"}}>✕</button>
+                </div>
+                <Bar label="糖分控制" value={m.sugar}/>
+                <Bar label="盐分控制" value={m.salt}/>
+                <Bar label="皮肤友好" value={m.skin}/>
+                <Bar label="营养均衡" value={m.nutrition}/>
+              </div>
+            );
+          })}
+          {meals.filter(m=>m.date!==today()).length>0&&(
+            <details style={{marginTop:8}}>
+              <summary style={{fontSize:12,color:"var(--sub)",cursor:"pointer",padding:"8px 0"}}>查看历史记录</summary>
+              {meals.filter(m=>m.date!==today()).slice(0,20).map(m=>{
+                const mt=MTYPES.find(x=>x.id===m.mealType)||MTYPES[0];
+                return (
+                  <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderTop:"1px solid var(--border)"}}>
+                    <span style={{fontSize:18}}>{mt.icon}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13,fontWeight:500}}>{m.name}</div>
+                      <div style={{fontSize:11,color:"var(--sub)"}}>{fmtDate(m.date)} {mt.label}</div>
+                    </div>
+                    <div style={{fontSize:16,fontWeight:700,color:sc(m.total)}}>{m.total}</div>
+                    <button onClick={()=>setMeals(p=>p.filter(x=>x.id!==m.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:14,cursor:"pointer"}}>✕</button>
+                  </div>
+                );
+              })}
+            </details>
+          )}
+        </div>
+      )}
+
+      {view==="stats"&&(
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:14}}>
+            {[["week","本周"],["month","本月"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setPeriod(k)} style={{padding:"6px 18px",borderRadius:20,border:`1.5px solid ${period===k?"var(--rose)":"var(--border)"}`,background:period===k?"var(--rl)":"#fff",color:period===k?"var(--rose)":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{l}</button>
+            ))}
+          </div>
+          {periodMeals.length===0?<Empty icon="🍽" text="暂无记录"/>:(
+            <div>
+              <div className="card" style={{marginBottom:12,textAlign:"center"}}>
+                <div style={{fontSize:12,color:"var(--sub)",marginBottom:4}}>平均总分</div>
+                <div style={{fontSize:40,fontWeight:700,color:sc(avgScore),fontFamily:"Lora,serif"}}>{avgScore}</div>
+                <div style={{fontSize:12,color:"var(--muted)"}}>共 {periodMeals.length} 餐记录</div>
+              </div>
+              {[["糖分控制","sugar"],["盐分控制","salt"],["皮肤友好","skin"],["营养均衡","nutrition"]].map(([l,k])=>{
+                const avg=periodMeals.length?Math.round(periodMeals.reduce((s,m)=>s+m[k],0)/periodMeals.length):0;
+                return (
+                  <div key={k} className="card" style={{marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                      <span style={{fontSize:14,fontWeight:500}}>{l}</span>
+                      <span style={{fontSize:16,fontWeight:700,color:sc(avg)}}>{avg}分</span>
+                    </div>
+                    <div style={{height:8,background:"#e8f0e4",borderRadius:4,overflow:"hidden"}}>
+                      <div style={{width:`${avg*10}%`,height:"100%",background:sc(avg),borderRadius:4,transition:"width 0.5s"}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════ EXERCISE PAGE ══════════════════
+function ExercisePage({exercises,setExercises,apiKey}){
+  const [showForm,setShowForm]=useState(false);
+  const [exDate,setExDate]=useState(today());
+  const [form,setForm]=useState({type:"跑步",duration:"",notes:""});
+  const [uploading,setUploading]=useState(false);
+  const [aiResult,setAiResult]=useState(null);
+  const fileRef=useRef();
+  const TYPES=["跑步","瑜伽","力量训练","游泳","骑行","健步走","HIIT","其他"];
+
+  const handleUpload=async e=>{
+    const file=e.target.files[0];if(!file)return;
+    if(!apiKey){alert("请先设置 API Key");return}
+    setUploading(true);
+    try{
+      const b64=await fileToBase64(file);
+      const text=await callClaude(apiKey,b64,file.type,"这是苹果健康或手表的运动截图。请提取运动类型、时长（分钟）。只返回JSON：{\"type\":\"跑步\",\"duration\":30}，不要其他内容。");
+      const parsed=JSON.parse(text);
+      setAiResult(parsed);
+      setForm(f=>({...f,type:parsed.type||f.type,duration:String(parsed.duration||f.duration)}));
+    }catch(e){alert("识别失败，请手动输入")}
+    setUploading(false);
+  };
+
+  const save=()=>{
+    if(!form.duration)return;
+    setExercises(p=>[{id:uid(),...form,date:exDate},...p]);
+    setForm({type:"跑步",duration:"",notes:""});setShowForm(false);setAiResult(null);
+  };
+
+  const todayEx=exercises.filter(e=>e.date===today()).reduce((s,e)=>s+parseInt(e.duration||0),0);
+  const weekEx=exercises.filter(e=>getWeekDates().includes(e.date)).reduce((s,e)=>s+parseInt(e.duration||0),0);
+
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+        <div className="card" style={{textAlign:"center",background:"var(--bl)"}}>
+          <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>今日运动</div>
+          <div style={{fontSize:28,fontWeight:700,color:"var(--blue)",fontFamily:"Lora,serif"}}>{todayEx}</div>
+          <div style={{fontSize:12,color:"var(--muted)"}}>分钟</div>
+        </div>
+        <div className="card" style={{textAlign:"center",background:"var(--bl)"}}>
+          <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>本周运动</div>
+          <div style={{fontSize:28,fontWeight:700,color:"var(--blue)",fontFamily:"Lora,serif"}}>{weekEx}</div>
+          <div style={{fontSize:12,color:"var(--muted)"}}>分钟</div>
+        </div>
+      </div>
+      {!showForm&&<button className="dbtn" onClick={()=>setShowForm(true)} style={{marginBottom:12}}>＋ 记录运动</button>}
+      {showForm&&(
+        <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+          <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--blue)",marginBottom:12,fontStyle:"italic"}}>记录运动</div>
+          <div style={{background:"var(--bl)",border:"1.5px dashed #8ab4c888",borderRadius:12,padding:"12px",marginBottom:12,textAlign:"center",cursor:"pointer"}} onClick={()=>fileRef.current.click()}>
+            <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleUpload}/>
+            {uploading?<div style={{fontSize:13,color:"var(--blue)",animation:"pulse 1s ease infinite"}}>🤖 AI 识别中…</div>:
+            aiResult?<div style={{fontSize:13,color:"var(--green)"}}>✅ 已识别：{aiResult.type} {aiResult.duration}分钟</div>:
+            <div style={{fontSize:13,color:"var(--blue)"}}>📷 上传手表截图，AI自动识别<br/><span style={{fontSize:11,color:"var(--muted)"}}>或手动填写下方</span></div>}
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <select className="isel" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))} style={{flex:1}}>
+              {TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+            <input className="ifld" placeholder="时长(分钟)" type="number" min="1" value={form.duration} onChange={e=>setForm(f=>({...f,duration:e.target.value}))} style={{flex:"0 0 90px"}}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+            <span style={{fontSize:13,color:"var(--sub)",flexShrink:0}}>📅 日期</span>
+            <input type="date" value={exDate} max={today()} onChange={e=>setExDate(e.target.value)} style={{flex:1,border:"1px solid var(--border)",borderRadius:8,padding:"6px 10px",fontSize:13}}/>
+            {exDate!==today()&&<span style={{fontSize:11,color:"var(--amber)",fontWeight:600}}>补记录</span>}
+          </div>
+          <textarea className="ifld" placeholder="备注（可选）" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} style={{marginBottom:14,resize:"none"}}/>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{flex:1,padding:"11px",background:"var(--blue)",border:"none",borderRadius:12,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>保存</button>
+            <button className="sbtn" onClick={()=>{setShowForm(false);setAiResult(null)}}>取消</button>
+          </div>
+        </div>
+      )}
+      {exercises.length===0&&<Empty icon="🏃" text="还没有运动记录，动起来！"/>}
+      {exercises.slice(0,20).map((e,i)=>(
+        <div key={e.id} className="card" style={{marginBottom:8,display:"flex",alignItems:"center",gap:12,animationDelay:`${i*0.04}s`}}>
+          <div style={{width:44,height:44,borderRadius:12,background:"var(--bl)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>🏃</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:600}}>{e.type}</div>
+            <div style={{fontSize:11,color:"var(--sub)"}}>{fmtDate(e.date)}{e.notes?` · ${e.notes}`:""}</div>
+          </div>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:18,fontWeight:700,color:"var(--blue)"}}>{e.duration}</div>
+            <div style={{fontSize:10,color:"var(--muted)"}}>分钟</div>
+          </div>
+          <button onClick={()=>setExercises(p=>p.filter(x=>x.id!==e.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:15,cursor:"pointer"}}>✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ══════════════════ SLEEP PAGE ══════════════════
+function SleepPage({logs,setLogs,apiKey}){
+  const [showForm,setShowForm]=useState(false);
+  const [sleepDate,setSleepDate]=useState(today());
+  const [form,setForm]=useState({bedtime:"",wakeTime:"",quality:7,notes:""});
+  const [uploading,setUploading]=useState(false);
+  const [aiResult,setAiResult]=useState(null);
+  const fileRef=useRef();
+
+  const calcDur=(bed,wake)=>{
+    if(!bed||!wake)return 0;
+    const [bh,bm]=bed.split(":").map(Number);
+    const [wh,wm]=wake.split(":").map(Number);
+    let mins=(wh*60+wm)-(bh*60+bm);
+    if(mins<0)mins+=24*60;
+    return Math.round(mins/60*10)/10;
+  };
+  const dur=calcDur(form.bedtime,form.wakeTime);
+  const qc=q=>q>=8?"var(--green)":q>=6?"var(--amber)":"var(--rose)";
+
+  const handleUpload=async e=>{
+    const file=e.target.files[0];if(!file)return;
+    if(!apiKey){alert("请先设置 API Key");return}
+    setUploading(true);
+    try{
+      const b64=await fileToBase64(file);
+      const text=await callClaude(apiKey,b64,file.type,"这是苹果健康的睡眠记录截图。请提取入睡时间和起床时间。只返回JSON：{\"bedtime\":\"23:30\",\"wakeTime\":\"07:00\"}，24小时格式，不要其他内容。");
+      const parsed=JSON.parse(text);
+      setAiResult(parsed);
+      setForm(f=>({...f,bedtime:parsed.bedtime||f.bedtime,wakeTime:parsed.wakeTime||f.wakeTime}));
+      setShowForm(true);
+    }catch(e){alert("识别失败，请手动输入");setShowForm(true)}
+    setUploading(false);
+  };
+
+  const save=()=>{
+    if(!form.bedtime||!form.wakeTime)return;
+    setLogs(p=>[{id:uid(),date:sleepDate,...form,duration:calcDur(form.bedtime,form.wakeTime)},...p.filter(l=>l.date!==sleepDate)]);
+    setForm({bedtime:"",wakeTime:"",quality:7,notes:""});setShowForm(false);setAiResult(null);
+  };
+
+  const todayLog=logs.find(l=>l.date===today());
+  const weekLogs=logs.filter(l=>getWeekDates().includes(l.date));
+  const avgDur=weekLogs.length?Math.round(weekLogs.reduce((s,l)=>s+l.duration,0)/weekLogs.length*10)/10:0;
+  const avgQ=weekLogs.length?Math.round(weekLogs.reduce((s,l)=>s+l.quality,0)/weekLogs.length*10)/10:0;
+
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+        <div className="card" style={{textAlign:"center",background:"var(--pl)"}}>
+          <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>今日睡眠</div>
+          <div style={{fontSize:28,fontWeight:700,color:"var(--purple)",fontFamily:"Lora,serif"}}>{todayLog?todayLog.duration+"h":"—"}</div>
+          <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>{todayLog?`${todayLog.bedtime}—${todayLog.wakeTime}`:"未记录"}</div>
+        </div>
+        <div className="card" style={{textAlign:"center",background:"var(--pl)"}}>
+          <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>本周平均质量</div>
+          <div style={{fontSize:28,fontWeight:700,color:qc(avgQ),fontFamily:"Lora,serif"}}>{avgQ||"—"}</div>
+          <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>均睡{avgDur}h</div>
+        </div>
+      </div>
+
+      <div style={{background:"var(--pl)",border:"1.5px dashed #c0b0e0",borderRadius:14,padding:"14px",marginBottom:12,textAlign:"center",cursor:"pointer"}} onClick={()=>fileRef.current.click()}>
+        <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleUpload}/>
+        {uploading?<div style={{fontSize:13,color:"var(--purple)",animation:"pulse 1s ease infinite"}}>🤖 AI 识别中…</div>:
+        aiResult?<div style={{fontSize:13,color:"var(--green)"}}>✅ 已识别：{aiResult.bedtime} — {aiResult.wakeTime}</div>:
+        <div style={{fontSize:13,color:"var(--purple)"}}>📷 上传苹果健康睡眠截图，AI自动识别<br/><span style={{fontSize:11,color:"var(--muted)"}}>点击上传</span></div>}
+      </div>
+
+      <button className="dbtn" onClick={()=>setShowForm(!showForm)} style={{marginBottom:12,borderColor:"#c0b0e0",color:"var(--purple)"}}>✏️ 手动记录睡眠</button>
+
+      {showForm&&(
+        <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+          <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--purple)",marginBottom:12,fontStyle:"italic"}}>记录睡眠</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+            <span style={{fontSize:13,color:"var(--sub)",flexShrink:0}}>📅 日期</span>
+            <input type="date" value={sleepDate} max={today()} onChange={e=>setSleepDate(e.target.value)} style={{flex:1,border:"1px solid var(--border)",borderRadius:8,padding:"6px 10px",fontSize:13}}/>
+            {sleepDate!==today()&&<span style={{fontSize:11,color:"var(--amber)",fontWeight:600}}>补记录</span>}
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:"var(--sub)",marginBottom:4}}>入睡时间</div>
+              <input className="ifld" type="time" value={form.bedtime} onChange={e=>setForm(f=>({...f,bedtime:e.target.value}))}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,color:"var(--sub)",marginBottom:4}}>起床时间</div>
+              <input className="ifld" type="time" value={form.wakeTime} onChange={e=>setForm(f=>({...f,wakeTime:e.target.value}))}/>
+            </div>
+          </div>
+          {dur>0&&<div style={{textAlign:"center",padding:"8px",background:"var(--pl)",borderRadius:10,marginBottom:10,fontSize:14,color:"var(--purple)",fontWeight:600}}>睡眠时长：{dur} 小时</div>}
+          <div style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+              <span style={{fontSize:12,color:"var(--sub)"}}>睡眠质量（主观评分）</span>
+              <span style={{fontSize:13,fontWeight:700,color:qc(form.quality)}}>{form.quality}分</span>
+            </div>
+            <input type="range" min={1} max={10} step={1} value={form.quality} onChange={e=>setForm(f=>({...f,quality:parseInt(e.target.value)}))} style={{width:"100%",accentColor:"var(--purple)"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"var(--muted)"}}>
+              <span>很差</span><span>一般</span><span>很好</span>
+            </div>
+          </div>
+          <textarea className="ifld" placeholder="备注（可选，如：多梦、睡前看手机…）" value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))} rows={2} style={{marginBottom:14,resize:"none"}}/>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={save} style={{flex:1,padding:"11px",background:"var(--purple)",border:"none",borderRadius:12,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>保存</button>
+            <button className="sbtn" onClick={()=>{setShowForm(false);setAiResult(null)}}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {logs.length===0&&<Empty icon="🌙" text="还没有睡眠记录"/>}
+      {logs.slice(0,14).map((l,i)=>(
+        <div key={l.id} className="card" style={{marginBottom:8,display:"flex",alignItems:"center",gap:12,animationDelay:`${i*0.04}s`,borderLeft:"4px solid #c0b0e0"}}>
+          <div style={{width:44,height:44,borderRadius:12,background:"var(--pl)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>🌙</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:600,color:"var(--purple)"}}>{l.duration}h <span style={{fontSize:12,fontWeight:400,color:"var(--sub)"}}>{l.bedtime}—{l.wakeTime}</span></div>
+            <div style={{fontSize:11,color:"var(--sub)"}}>{fmtDate(l.date)}{l.notes?` · ${l.notes}`:""}</div>
+          </div>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:700,color:qc(l.quality)}}>{l.quality}</div>
+            <div style={{fontSize:9,color:"var(--muted)"}}>质量</div>
+          </div>
+          <button onClick={()=>setLogs(p=>p.filter(x=>x.id!==l.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:15,cursor:"pointer"}}>✕</button>
+        </div>
+      ))}
+
+      {weekLogs.length>0&&(
+        <div className="card" style={{marginTop:8}}>
+          <div style={{fontSize:12,color:"var(--sub)",marginBottom:10}}>本周睡眠时长</div>
+          <div style={{display:"flex",gap:4}}>
+            {getWeekDates().map(d=>{
+              const l=logs.find(x=>x.date===d);
+              const h=l?.duration||0;
+              const isT=d===today();
+              return (
+                <div key={d} style={{flex:1,textAlign:"center"}}>
+                  <div style={{height:60,display:"flex",alignItems:"flex-end",justifyContent:"center",marginBottom:4}}>
+                    <div style={{width:"70%",height:`${h?Math.max(8,Math.min(60,h*7)):4}px`,background:h>=7?"#9a80c0":"var(--rose)",borderRadius:"4px 4px 0 0",transition:"height 0.3s",border:isT?"2px solid var(--purple)":"none"}}/>
+                  </div>
+                  <div style={{fontSize:9,color:isT?"var(--purple)":"var(--muted)"}}>{["日","一","二","三","四","五","六"][new Date(d).getDay()]}</div>
+                  <div style={{fontSize:9,color:"var(--sub)"}}>{h?h+"h":""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════ SUN PAGE ══════════════════
+function SunPage({logs,setLogs}){
+  const [minutes,setMinutes]=useState("20");
+  const [sunDate,setSunDate]=useState(today());
+  const PRESETS=[10,15,20,30,45,60];
+
+  const log=m=>{
+    if(!m||m<=0)return;
+    setLogs(p=>[{id:uid(),date:sunDate,minutes:parseInt(m),time:fmtTime()},...p]);
+    setMinutes("20");
+  };
+
+  const todayTotal=logs.filter(l=>l.date===today()).reduce((s,l)=>s+l.minutes,0);
+  const weekTotal=logs.filter(l=>getWeekDates().includes(l.date)).reduce((s,l)=>s+l.minutes,0);
+  const todayLogs=logs.filter(l=>l.date===today());
+
+  return (
+    <div>
+      <div style={{background:"linear-gradient(135deg,var(--al),#fff9e8)",border:"1px solid #f0d890",borderRadius:20,padding:"20px",marginBottom:16,textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:8}}>☀️</div>
+        <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>今日晒太阳</div>
+        <div style={{fontFamily:"Lora,serif",fontSize:48,fontWeight:600,color:"var(--amber)"}}>{todayTotal}</div>
+        <div style={{fontSize:14,color:"var(--sub)"}}>分钟</div>
+        <div style={{fontSize:12,color:"var(--muted)",marginTop:8}}>本周合计 {weekTotal} 分钟</div>
+      </div>
+
+      <div className="card" style={{marginBottom:14}}>
+        <div style={{fontFamily:"Lora,serif",fontSize:14,color:"var(--amber)",marginBottom:12,fontStyle:"italic"}}>记录晒太阳</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+          <span style={{fontSize:13,color:"var(--sub)",flexShrink:0}}>📅 日期</span>
+          <input type="date" value={sunDate} max={today()} onChange={e=>setSunDate(e.target.value)} style={{flex:1,border:"1px solid var(--border)",borderRadius:8,padding:"6px 10px",fontSize:13}}/>
+          {sunDate!==today()&&<span style={{fontSize:11,color:"var(--amber)",fontWeight:600}}>补记录</span>}
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+          {PRESETS.map(p=>(
+            <button key={p} onClick={()=>setMinutes(String(p))} style={{padding:"6px 14px",borderRadius:20,border:`1.5px solid ${minutes==p?"var(--amber)":"var(--border)"}`,background:minutes==p?"var(--al)":"#fff",color:minutes==p?"var(--amber)":"var(--sub)",fontSize:13,fontWeight:600,cursor:"pointer"}}>{p}分</button>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <input className="ifld" type="number" min="1" placeholder="自定义分钟" value={minutes} onChange={e=>setMinutes(e.target.value)} style={{flex:1}}/>
+          <button onClick={()=>log(minutes)} style={{padding:"10px 20px",background:"var(--amber)",border:"none",borderRadius:12,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>记录</button>
+        </div>
+      </div>
+
+      {todayLogs.map((l,i)=>(
+        <div key={l.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:"#fff",border:"1px solid var(--border)",borderRadius:12,marginBottom:8}}>
+          <span style={{fontSize:20}}>☀️</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:500,color:"var(--amber)"}}>+{l.minutes} 分钟</div>
+            <div style={{fontSize:11,color:"var(--muted)"}}>{fmtDate(l.date)} {l.time}</div>
+          </div>
+          <button onClick={()=>setLogs(p=>p.filter(x=>x.id!==l.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:15,cursor:"pointer"}}>✕</button>
+        </div>
+      ))}
+
+      <div className="card" style={{marginTop:8}}>
+        <div style={{fontSize:12,color:"var(--sub)",marginBottom:10}}>本周记录</div>
+        <div style={{display:"flex",gap:4}}>
+          {getWeekDates().map(d=>{
+            const total=logs.filter(l=>l.date===d).reduce((s,l)=>s+l.minutes,0);
+            const isT=d===today();
+            return (
+              <div key={d} style={{flex:1,textAlign:"center"}}>
+                <div style={{height:60,display:"flex",alignItems:"flex-end",justifyContent:"center",marginBottom:4}}>
+                  <div style={{width:"70%",height:`${total?Math.max(8,Math.min(60,total)):4}px`,background:total?"var(--amber)":"#e8f0e4",borderRadius:"4px 4px 0 0",transition:"height 0.3s",border:isT?"2px solid var(--amber)":"none"}}/>
+                </div>
+                <div style={{fontSize:9,color:isT?"var(--amber)":"var(--muted)"}}>{["日","一","二","三","四","五","六"][new Date(d).getDay()]}</div>
+                <div style={{fontSize:9,color:"var(--sub)"}}>{total?total+"m":""}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════ SCREEN PAGE ══════════════════
+function ScreenPage({logs,setLogs,apiKey}){
+  const [uploading,setUploading]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [form,setForm]=useState({total:"",entertainment:"",study:"",shopping:"",other:""});
+  const fileRef=useRef();
+  const CATS=[{k:"entertainment",label:"娱乐",color:"var(--rose)"},{k:"study",label:"学习",color:"var(--green)"},{k:"shopping",label:"购物",color:"var(--amber)"},{k:"other",label:"其他",color:"var(--muted)"}];
+
+  const handleUpload=async e=>{
+    const file=e.target.files[0];if(!file)return;
+    if(!apiKey){alert("请先设置 API Key");return}
+    setUploading(true);
+    try{
+      const b64=await fileToBase64(file);
+      const text=await callClaude(apiKey,b64,file.type,"这是iPhone屏幕使用时间截图。请提取总屏幕时间（分钟）、各类别时长。把应用分为：娱乐、学习、购物、其他。只返回JSON：{\"total\":120,\"entertainment\":60,\"study\":30,\"shopping\":10,\"other\":20}，不要其他内容。");
+      const parsed=JSON.parse(text);
+      setForm({total:String(parsed.total||""),entertainment:String(parsed.entertainment||""),study:String(parsed.study||""),shopping:String(parsed.shopping||""),other:String(parsed.other||"")});
+      setShowForm(true);
+    }catch(e){alert("识别失败，请手动输入");setShowForm(true)}
+    setUploading(false);
+  };
+
+  const save=()=>{
+    if(!form.total)return;
+    setLogs(p=>[{id:uid(),date:today(),total:parseInt(form.total),entertainment:parseInt(form.entertainment||0),study:parseInt(form.study||0),shopping:parseInt(form.shopping||0),other:parseInt(form.other||0)},...p.filter(l=>l.date!==today())]);
+    setShowForm(false);
+  };
+
+  const todayLog=logs.find(l=>l.date===today());
+  const weekLogs=logs.filter(l=>getWeekDates().includes(l.date));
+  const avgScreen=weekLogs.length?Math.round(weekLogs.reduce((s,l)=>s+l.total,0)/weekLogs.length):0;
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:14,textAlign:"center",background:"#f4f0f8"}}>
+        <div style={{fontSize:36,marginBottom:6}}>📱</div>
+        <div style={{fontSize:11,color:"var(--sub)",marginBottom:4}}>今日屏幕时间</div>
+        {todayLog?(
+          <div>
+            <div style={{fontFamily:"Lora,serif",fontSize:48,fontWeight:600,color:"#7a6aa0"}}>{todayLog.total}</div>
+            <div style={{fontSize:14,color:"var(--sub)"}}>分钟</div>
+            <div style={{display:"flex",gap:8,marginTop:12,justifyContent:"center",flexWrap:"wrap"}}>
+              {CATS.map(c=>(
+                <div key={c.k} style={{padding:"4px 10px",borderRadius:20,background:"#fff",border:"1px solid var(--border)",fontSize:12,color:c.color}}>{c.label} {todayLog[c.k]}m</div>
+              ))}
+            </div>
+          </div>
+        ):<div style={{fontSize:14,color:"var(--muted)",padding:"8px 0"}}>还没有记录</div>}
+      </div>
+
+      <div style={{background:"#f4f0f8",border:"1.5px dashed #c0b0e0",borderRadius:14,padding:"14px",marginBottom:12,textAlign:"center",cursor:"pointer"}} onClick={()=>fileRef.current.click()}>
+        <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleUpload}/>
+        {uploading?<div style={{fontSize:13,color:"#7a6aa0",animation:"pulse 1s ease infinite"}}>🤖 AI 识别中…</div>:
+        <div style={{fontSize:13,color:"#7a6aa0"}}>📷 上传屏幕时间截图，AI自动识别<br/><span style={{fontSize:11,color:"var(--muted)"}}>点击上传</span></div>}
+      </div>
+
+      <button className="dbtn" onClick={()=>setShowForm(!showForm)} style={{marginBottom:12,borderColor:"#c0b0e0",color:"#7a6aa0"}}>✏️ 手动输入屏幕时间</button>
+
+      {showForm&&(
+        <div className="card" style={{marginBottom:14,animation:"popIn 0.2s ease"}}>
+          <div style={{fontFamily:"Lora,serif",fontSize:14,color:"#7a6aa0",marginBottom:12,fontStyle:"italic"}}>今日屏幕时间</div>
+          <input className="ifld" placeholder="总时长（分钟）" type="number" value={form.total} onChange={e=>setForm(f=>({...f,total:e.target.value}))} style={{marginBottom:8}}/>
+          {CATS.map(c=>(
+            <input key={c.k} className="ifld" placeholder={`${c.label}（分钟）`} type="number" value={form[c.k]} onChange={e=>setForm(f=>({...f,[c.k]:e.target.value}))} style={{marginBottom:8}}/>
+          ))}
+          <div style={{display:"flex",gap:8,marginTop:6}}>
+            <button onClick={save} style={{flex:1,padding:"11px",background:"#7a6aa0",border:"none",borderRadius:12,color:"#fff",fontWeight:600,fontSize:14,cursor:"pointer"}}>保存</button>
+            <button className="sbtn" onClick={()=>setShowForm(false)}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {weekLogs.length>0&&(
+        <div className="card">
+          <div style={{fontSize:12,color:"var(--sub)",marginBottom:10}}>本周屏幕时间 · 日均 {avgScreen} 分钟</div>
+          <div style={{display:"flex",gap:4}}>
+            {getWeekDates().map(d=>{
+              const l=logs.find(x=>x.date===d);
+              const total=l?.total||0;
+              const isT=d===today();
+              return (
+                <div key={d} style={{flex:1,textAlign:"center"}}>
+                  <div style={{height:60,display:"flex",alignItems:"flex-end",justifyContent:"center",marginBottom:4}}>
+                    <div style={{width:"70%",height:`${total?Math.max(8,Math.min(60,total/5)):4}px`,background:total>=240?"var(--rose)":total>=120?"var(--amber)":"var(--green)",borderRadius:"4px 4px 0 0",transition:"height 0.3s",border:isT?"2px solid #7a6aa0":"none"}}/>
+                  </div>
+                  <div style={{fontSize:9,color:isT?"#7a6aa0":"var(--muted)"}}>{["日","一","二","三","四","五","六"][new Date(d).getDay()]}</div>
+                  <div style={{fontSize:9,color:"var(--sub)"}}>{total?total+"m":""}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════ NOTES PAGE ══════════════════
+function NotesPage({notes,setNotes}){
+  const [text,setText]=useState("");
+
+  const add=()=>{
+    if(!text.trim())return;
+    setNotes(p=>[{id:uid(),text:text.trim(),date:today(),time:fmtTime()},...p]);
+    setText("");
+  };
+
+  const grouped=notes.reduce((acc,n)=>{if(!acc[n.date])acc[n.date]=[];acc[n.date].push(n);return acc},{});
+  const dates=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+
+  return (
+    <div>
+      <div className="card" style={{marginBottom:14}}>
+        <textarea className="ifld" placeholder="记录此刻的想法、感受、或任何值得留下的事…" value={text} onChange={e=>setText(e.target.value)} rows={3} style={{marginBottom:10,resize:"none",fontSize:15,lineHeight:1.6,fontFamily:"Lora,serif"}}/>
+        <button className="pbtn" onClick={add}>记录 ✍️</button>
+      </div>
+      {notes.length===0&&<Empty icon="📝" text="还没有笔记，记录今天的第一条吧"/>}
+      {dates.map(d=>(
+        <div key={d} style={{marginBottom:16}}>
+          <div style={{fontSize:12,color:"var(--sub)",fontWeight:600,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+            <div style={{height:1,flex:1,background:"var(--border)"}}/>
+            {fmtDate(d)}
+            <div style={{height:1,flex:1,background:"var(--border)"}}/>
+          </div>
+          {grouped[d].map((n,i)=>(
+            <div key={n.id} className="card" style={{marginBottom:8,borderLeft:"3px solid var(--gm)",animationDelay:`${i*0.04}s`}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,lineHeight:1.7,fontFamily:"Lora,serif",whiteSpace:"pre-wrap"}}>{n.text}</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:6}}>{n.time}</div>
+                </div>
+                <button onClick={()=>setNotes(p=>p.filter(x=>x.id!==n.id))} style={{background:"transparent",border:"none",color:"var(--muted)",fontSize:15,cursor:"pointer",flexShrink:0}}>✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ══════════════════ REPORT PAGE ══════════════════
+function ReportPage({habits,habitLogs,tasks,meals,exercises,sunLogs,screenLogs,sleepLogs}){
+  const [offset,setOffset]=useState(0);
+  const [generating,setGenerating]=useState(false);
+
+  const dates=getWeekDates(offset);
+  const ws=dates[0],we=dates[6];
+  const fd=d=>{const dt=new Date(d+' ');return`${dt.getMonth()+1}月${dt.getDate()}日`};
+
+  const goodHabits=habits.filter(h=>h.type!=="bad");
+  const habitRows=goodHabits.map(h=>{
+    const hl=habitLogs[h.id]||{};
+    const counts=dates.map(d=>hl[d]||0);
+    const days=counts.filter(c=>c>0).length;
+    return{h,counts,days,pct:Math.round(days/7*100)};
+  });
+  const avgHabitPct=habitRows.length?Math.round(habitRows.reduce((s,r)=>s+r.pct,0)/habitRows.length):0;
+
+  const weekMeals=meals.filter(m=>dates.includes(m.date));
+  const avgMeal=weekMeals.length?Math.round(weekMeals.reduce((s,m)=>s+m.total,0)/weekMeals.length):0;
+  const avgSugar=weekMeals.length?Math.round(weekMeals.reduce((s,m)=>s+m.sugar,0)/weekMeals.length):0;
+  const avgSalt=weekMeals.length?Math.round(weekMeals.reduce((s,m)=>s+m.salt,0)/weekMeals.length):0;
+  const avgSkin=weekMeals.length?Math.round(weekMeals.reduce((s,m)=>s+m.skin,0)/weekMeals.length):0;
+  const avgNutrition=weekMeals.length?Math.round(weekMeals.reduce((s,m)=>s+m.nutrition,0)/weekMeals.length):0;
+
+  const weekEx=exercises.filter(e=>dates.includes(e.date));
+  const totalEx=weekEx.reduce((s,e)=>s+parseInt(e.duration||0),0);
+  const exDays=new Set(weekEx.map(e=>e.date)).size;
+
+  const totalSun=sunLogs.filter(l=>dates.includes(l.date)).reduce((s,l)=>s+l.minutes,0);
+
+  const weekScreen=screenLogs.filter(l=>dates.includes(l.date));
+  const avgScreen=weekScreen.length?Math.round(weekScreen.reduce((s,l)=>s+l.total,0)/weekScreen.length):0;
+
+  const weekSleep=sleepLogs.filter(l=>dates.includes(l.date));
+  const avgSleepDur=weekSleep.length?Math.round(weekSleep.reduce((s,l)=>s+l.duration,0)/weekSleep.length*10)/10:0;
+  const avgSleepQ=weekSleep.length?Math.round(weekSleep.reduce((s,l)=>s+l.quality,0)/weekSleep.length*10)/10:0;
+
+  const sc=s=>s>=7?"#4a7c59":s>=5?"#d4860a":"#c4614a";
+  const bar=(pct,color)=>`<div style="height:8px;background:#e8f0e4;border-radius:4px;overflow:hidden;margin-top:4px"><div style="width:${pct}%;height:100%;background:${color};border-radius:4px"></div></div>`;
+
+  const generatePDF=()=>{
+    setGenerating(true);
+    const html=`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"><style>*{box-sizing:border-box;margin:0;padding:0}body{background:#fdf9f3;font-family:'DM Sans','PingFang SC',sans-serif;color:#2c3e2d}.page{width:794px;margin:0 auto;background:#fff;padding:0}.cover{background:linear-gradient(160deg,#eef6f0,#fef9f0,#e8f4f8);padding:60px 48px 40px;position:relative;overflow:hidden}.cover::after{content:"🌿";position:absolute;right:40px;top:30px;font-size:120px;opacity:0.08}.cov-tag{font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#6b8c6e;margin-bottom:16px}.cov-title{font-family:'Lora',serif;font-size:36px;font-weight:600;color:#2c3e2d;line-height:1.3;margin-bottom:8px}.cov-sub{font-size:14px;color:#6b8c6e;margin-bottom:32px}.cov-date{display:inline-block;padding:8px 20px;background:#4a7c59;color:#fff;border-radius:20px;font-size:13px;font-weight:600}.body{padding:40px 48px}.sec{margin-bottom:32px}.sec-title{font-family:'Lora',serif;font-size:18px;font-weight:600;color:#4a7c59;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #eef6f0}.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}.sc{background:#f8fbf6;border:1px solid #ddeedd;border-radius:12px;padding:14px;text-align:center}.sn{font-family:'Lora',serif;font-size:28px;font-weight:600;line-height:1.2}.sl{font-size:11px;color:#6b8c6e;margin-top:4px}.hr{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #f0f7ec}.dots{display:flex;gap:4px}.dot{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600}.sr{display:flex;align-items:center;gap:12px;margin-bottom:10px}.sl2{width:80px;font-size:12px;color:#6b8c6e;flex-shrink:0}.sbw{flex:1}.ti{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f8fbf6;border-radius:10px;margin-bottom:6px}.tp{flex:1;height:6px;background:#e8f0e4;border-radius:3px;overflow:hidden}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="page"><div class="cover"><div class="cov-tag">生长日记 · 周报</div><div class="cov-title">这一周，<br/>你认真生活了。</div><div class="cov-sub">记录每一天的努力，见证自己的成长</div><div class="cov-date">${fd(ws)} — ${fd(we)}</div></div><div class="body"><div class="sec"><div class="sec-title">🌟 本周概览</div><div class="g3"><div class="sc"><div class="sn" style="color:#4a7c59">${avgHabitPct}%</div><div class="sl">习惯完成率</div></div><div class="sc"><div class="sn" style="color:#5b8fa8">${totalEx}</div><div class="sl">运动分钟</div></div><div class="sc"><div class="sn" style="color:#d4860a">${totalSun}</div><div class="sl">晒太阳分钟</div></div></div><div class="g3"><div class="sc"><div class="sn" style="color:${sc(avgMeal)}">${avgMeal||"—"}</div><div class="sl">饮食平均分</div></div><div class="sc"><div class="sn" style="color:#7a5a9a">${avgSleepDur||"—"}</div><div class="sl">平均睡眠(h)</div></div><div class="sc"><div class="sn" style="color:${avgScreen>240?"#c4614a":avgScreen>120?"#d4860a":"#4a7c59"}">${avgScreen||"—"}</div><div class="sl">日均屏幕(分钟)</div></div></div></div>${habitRows.length>0?`<div class="sec"><div class="sec-title">🌱 习惯打卡（正向）</div>${habitRows.map(({h,counts,days,pct})=>`<div class="hr"><span style="font-size:18px;flex-shrink:0">${h.emoji}</span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;margin-bottom:4px">${h.title}</div><div class="dots">${counts.map(c=>`<div class="dot" style="background:${c>0?"#b8d8c0":"#f0f7ec"};color:${c>0?"#2a6040":"#a8c0a8"}">${c>0?c:"·"}</div>`).join("")}</div></div><div style="text-align:right;flex-shrink:0"><div style="font-size:16px;font-weight:700;color:#4a7c59">${pct}%</div><div style="font-size:10px;color:#a8c0a8">${days}/7天</div></div></div>`).join("")}</div>`:""}${weekMeals.length>0?`<div class="sec"><div class="sec-title">🍽 饮食健康</div><div style="background:#fdf0ee;border-radius:12px;padding:16px;margin-bottom:12px;text-align:center"><div style="font-size:11px;color:#c4614a;margin-bottom:4px">本周平均总分</div><div style="font-family:'Lora',serif;font-size:48px;font-weight:600;color:${sc(avgMeal)}">${avgMeal}</div><div style="font-size:12px;color:#a8c0a8">共记录 ${weekMeals.length} 餐</div></div><div class="sr"><div class="sl2">糖分控制</div><div class="sbw">${bar(avgSugar*10,sc(avgSugar))}</div><div style="font-size:13px;font-weight:600;color:${sc(avgSugar)};width:30px;text-align:right">${avgSugar}</div></div><div class="sr"><div class="sl2">盐分控制</div><div class="sbw">${bar(avgSalt*10,sc(avgSalt))}</div><div style="font-size:13px;font-weight:600;color:${sc(avgSalt)};width:30px;text-align:right">${avgSalt}</div></div><div class="sr"><div class="sl2">皮肤友好</div><div class="sbw">${bar(avgSkin*10,sc(avgSkin))}</div><div style="font-size:13px;font-weight:600;color:${sc(avgSkin)};width:30px;text-align:right">${avgSkin}</div></div><div class="sr"><div class="sl2">营养均衡</div><div class="sbw">${bar(avgNutrition*10,sc(avgNutrition))}</div><div style="font-size:13px;font-weight:600;color:${sc(avgNutrition)};width:30px;text-align:right">${avgNutrition}</div></div></div>`:""}${tasks.length>0?`<div class="sec"><div class="sec-title">📚 任务进度</div>${tasks.slice(0,8).map(t=>{const tp=TASK_TYPES.find(x=>x.id===t.type)||TASK_TYPES[0];const pct=Math.round(t.current/t.total*100);return`<div class="ti"><span style="font-size:16px">${tp.icon}</span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:500;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.title}</div><div class="tp"><div style="width:${pct}%;height:100%;background:${tp.color};border-radius:3px"></div></div></div><div style="font-size:13px;font-weight:700;color:${tp.color};flex-shrink:0;margin-left:8px">${pct}%</div></div>`}).join("")}</div>`:""}${weekSleep.length>0?`<div class="sec"><div class="sec-title">🌙 睡眠记录</div><div class="g2"><div class="sc" style="background:#f0ecf8"><div class="sn" style="color:#7a5a9a">${avgSleepDur}h</div><div class="sl">平均睡眠时长</div></div><div class="sc" style="background:#f0ecf8"><div class="sn" style="color:${sc(avgSleepQ)}">${avgSleepQ}</div><div class="sl">平均睡眠质量</div></div></div></div>`:""}${weekEx.length>0?`<div class="sec"><div class="sec-title">🏃 运动记录</div><div class="g3"><div class="sc" style="background:#e8f4f8"><div class="sn" style="color:#5b8fa8">${totalEx}</div><div class="sl">运动总分钟</div></div><div class="sc" style="background:#e8f4f8"><div class="sn" style="color:#5b8fa8">${exDays}</div><div class="sl">运动天数</div></div><div class="sc" style="background:#e8f4f8"><div class="sn" style="color:#5b8fa8">${exDays>0?Math.round(totalEx/exDays):0}</div><div class="sl">平均每次(分钟)</div></div></div></div>`:""}
+<div style="text-align:center;padding:24px 0 8px;border-top:1px solid #e8f0e4"><div style="font-family:'Lora',serif;font-size:13px;color:#6b8c6e;font-style:italic">「在严冬，我终于知道，我身上有一个不可战胜的夏天。」</div><div style="font-size:11px;color:#a8c0a8;margin-top:4px">—— 加缪 · 生长日记</div></div></div></div></body></html>`;
+
+    const win=window.open("","_blank");
+    win.document.write(html);
+    win.document.close();
+    setTimeout(()=>{win.focus();win.print();setGenerating(false)},800);
+  };
+
+  return (
+    <div>
+      <div style={{background:"linear-gradient(135deg,#eef6f0,#fef9f0)",border:"1px solid var(--border)",borderRadius:20,padding:"24px",marginBottom:16,textAlign:"center",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",right:20,top:10,fontSize:60,opacity:0.08}}>📋</div>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:6}}>
+          <button onClick={()=>setOffset(-1)} style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${offset===-1?"var(--green)":"var(--border)"}`,background:offset===-1?"var(--gl)":"#fff",color:offset===-1?"var(--green)":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>上周</button>
+          <div style={{fontFamily:"Lora,serif",fontSize:20,fontWeight:600,color:"var(--green)"}}>周报</div>
+          <button onClick={()=>setOffset(0)} style={{padding:"5px 14px",borderRadius:20,border:`1.5px solid ${offset===0?"var(--green)":"var(--border)"}`,background:offset===0?"var(--gl)":"#fff",color:offset===0?"var(--green)":"var(--sub)",fontSize:12,fontWeight:600,cursor:"pointer"}}>本周</button>
+        </div>
+        <div style={{fontSize:13,color:"var(--sub)",marginBottom:16}}>{fd(ws)} — {fd(we)}</div>
+        <button onClick={generatePDF} disabled={generating} style={{padding:"13px 32px",background:generating?"var(--muted)":"var(--green)",border:"none",borderRadius:14,color:"#fff",fontWeight:600,fontSize:15,cursor:generating?"not-allowed":"pointer",boxShadow:"0 4px 16px rgba(74,124,89,0.25)"}}>
+          {generating?"⏳ 生成中…":"📄 生成周报 PDF"}
+        </button>
+        <div style={{fontSize:11,color:"var(--muted)",marginTop:10}}>弹出打印窗口后，选择「存储为PDF」保存</div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div className="card" style={{textAlign:"center",background:"var(--gl)"}}><div style={{fontSize:26,fontWeight:700,color:"var(--green)",fontFamily:"Lora,serif"}}>{avgHabitPct}%</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>习惯完成率</div></div>
+        <div className="card" style={{textAlign:"center",background:"var(--bl)"}}><div style={{fontSize:26,fontWeight:700,color:"var(--blue)",fontFamily:"Lora,serif"}}>{totalEx}</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>运动分钟</div></div>
+        <div className="card" style={{textAlign:"center",background:"var(--al)"}}><div style={{fontSize:26,fontWeight:700,color:"var(--amber)",fontFamily:"Lora,serif"}}>{totalSun}</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>晒太阳分钟</div></div>
+        <div className="card" style={{textAlign:"center",background:"var(--rl)"}}><div style={{fontSize:26,fontWeight:700,color:"var(--rose)",fontFamily:"Lora,serif"}}>{avgMeal||"—"}</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>饮食平均分</div></div>
+        <div className="card" style={{textAlign:"center",background:"var(--pl)"}}><div style={{fontSize:26,fontWeight:700,color:"var(--purple)",fontFamily:"Lora,serif"}}>{avgSleepDur||"—"}</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>平均睡眠(h)</div></div>
+        <div className="card" style={{textAlign:"center",background:"#f4f0f8"}}><div style={{fontSize:26,fontWeight:700,color:"#7a6aa0",fontFamily:"Lora,serif"}}>{avgScreen||"—"}</div><div style={{fontSize:11,color:"var(--sub)",marginTop:4}}>日均屏幕(分钟)</div></div>
+      </div>
+
+      <div style={{padding:14,background:"var(--gl)",border:"1px solid var(--gm)",borderRadius:12,fontSize:12,color:"var(--sub)",lineHeight:1.7}}>
+        💡 建议每周日生成一份留存，作为数据备份和自我成长记录。
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════ EMPTY STATE ══════════════════
+function Empty({icon,text}){
+  return (
+    <div style={{textAlign:"center",padding:"48px 0",color:"var(--muted)"}}>
+      <div style={{fontSize:40,marginBottom:10}}>{icon}</div>
+      <div style={{fontSize:14}}>{text}</div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
